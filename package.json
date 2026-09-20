@@ -1,0 +1,28 @@
+{
+  "name": "patchpilot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "test": "vitest run",
+    "test:unit": "vitest run --exclude test/api.integration.test.ts",
+    "test:integration": "vitest run test/api.integration.test.ts",
+    "audit:identifiers": "node scripts/audit-identifiers.mjs"
+  },
+  "dependencies": {
+    "@cursor/sdk": "^1.0.31",
+    "@openai/codex-sdk": "^0.154.0",
+    "express": "^5.1.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

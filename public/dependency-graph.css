@@ -1,0 +1,72 @@
+.package-graph {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  margin-top: 10px;
+}
+.package-graph summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 750;
+}
+.package-graph summary small { color: var(--muted); font-weight: 500; }
+.package-graph-flow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  margin-top: 15px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fafbf9;
+}
+.graph-column { align-self: stretch; min-width: 0; }
+.graph-label {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.graph-node-list { display: grid; gap: 6px; max-height: 260px; overflow: auto; }
+.graph-node {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: white;
+}
+.graph-node strong { overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.graph-node small { color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.graph-node.selected {
+  min-width: 130px;
+  border: 2px solid var(--green);
+  background: var(--green2);
+  text-align: center;
+}
+.graph-edge-kind { color: var(--blue); font-size: 9px; text-transform: uppercase; }
+.graph-target {
+  display: grid;
+  grid-template-columns: auto minmax(130px, auto) auto;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.graph-empty { margin: 8px 0 !important; font-size: 11px !important; }
+.package-graph .graph-help { margin: 8px 0 0; color: var(--muted); font-size: 11px; }
+
+@media (max-width: 560px) {
+  .package-graph summary { align-items: flex-start; flex-direction: column; }
+  .package-graph-flow { grid-template-columns: 1fr; }
+  .graph-target { grid-template-columns: 1fr; text-align: center; }
+  .graph-target > span { transform: rotate(90deg); }
+}

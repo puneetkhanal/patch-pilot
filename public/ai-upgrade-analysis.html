@@ -1,0 +1,45 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI analysis · PatchPilot</title><link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/dependency-analysis.css"></head><body>
+<header class="topbar"><a class="brand" href="/"><span class="brand-mark">P</span><span>PatchPilot</span></a><nav><a href="/">Issues</a><a href="/prs.html">Pull requests</a><a href="/worktrees.html">Worktrees</a></nav></header>
+<main><section class="hero compact"><div><p class="eyebrow">Upgrade intelligence</p><h1>One AI analysis.</h1><p>Cursor or Gemini assesses upgrade safety and returns implementation and verification guidance. No dependency-engine analysis runs in this workflow.</p></div><span id="configuration" class="status-pill">Loading configuration…</span></section>
+<section class="control-panel"><label>Repository<input id="repo" placeholder="owner/repository"></label><label class="grow">Local clone path<input id="project-path" placeholder="/path/to/local/clone"></label><label>AI provider<select id="ai-provider"><option value="cursor">Cursor</option><option value="gemini">Gemini</option></select></label><button id="load">Load results</button><button id="run-ai" class="primary">Run AI analysis</button></section>
+<section id="summary" class="summary"><div class="metric"><strong>—</strong><span>Dependencies</span></div></section>
+<section class="panel pipeline-panel"><div class="dialog-head"><div><p class="eyebrow" id="provider-label">AI analysis</p><h2>Repository-aware upgrade review</h2></div></div><p id="provider-copy">Each run inspects manifests, lockfiles, imports, API usage, configuration, and tests.</p><div id="progress-wrap" class="hidden"><p id="progress-label">Starting…</p><div class="progress"><span id="progress-bar" style="width:0"></span></div></div></section>
+<section class="section-head"><div><p class="eyebrow">AI recommendations</p><h2 id="issue-count">No dependencies loaded</h2></div></section><div id="results" class="analysis-list"><div class="empty">Choose a repository and run AI analysis.</div></div>
+<details class="panel prompt-panel"><summary>AI analysis prompt</summary><p class="manifest">Saved in this browser; API keys remain server-side.</p><textarea id="prompt" class="prompt" aria-label="AI analysis prompt"></textarea><div class="detail-actions"><button id="save-prompt">Save prompt</button><button id="reset-prompt">Reset</button></div></details>
+</main>
+<script type="module">
+import{$,api,h,installRepoControls,settings,splitRepo,withBusy}from'./common.js';
+let issues=[],report;const defaults=await api('/api/config/defaults');installRepoControls(defaults);const template=await api('/api/analysis/prompt-template');$('#prompt').value=settings.prompt||template.promptTemplate;
+const providers=template.aiProviders||[];
+function defaultProvider(){if(settings.aiProvider&&providers.includes(settings.aiProvider))return settings.aiProvider;return providers.includes('cursor')?'cursor':providers[0]||'cursor'}
+function providerModel(provider){return provider==='gemini'?template.geminiModel:template.cursorModel}
+function aiReady(){return providers.length>0}
+function syncProviderUi(){
+ const provider=defaultProvider();settings.aiProvider=provider;$('#ai-provider').value=provider;
+ for(const option of $('#ai-provider').options)option.disabled=!providers.includes(option.value);
+ $('#configuration').textContent=aiReady()?`AI ready · ${providerModel(provider)}`:'No AI provider configured';
+ $('#provider-label').textContent=provider==='gemini'?'Gemini':'Cursor Composer 2.5';
+ $('#provider-copy').textContent=provider==='gemini'?'Gemini analyzes pre-collected manifests, lockfile excerpts, import usage, and heuristic evidence.':'Each run inspects manifests, lockfiles, imports, API usage, configuration, and tests with read-only tools in a local sandbox.';
+ $('#run-ai').disabled=!aiReady();
+}
+syncProviderUi();
+$('#ai-provider').addEventListener('change',event=>{settings.aiProvider=event.target.value;syncProviderUi()});
+function route(s=''){const[o,r]=splitRepo();return`/api/repos/${encodeURIComponent(o)}/${encodeURIComponent(r)}${s}`}
+function riskTag(risk){return h('span',{class:`tag risk-${risk}`},risk.replaceAll('_',' '))}
+function when(value){return value?new Date(value).toLocaleString():'Never'}
+function render(){
+ const counts=report?.summary||{};$('#summary').replaceChildren(...[['Dependencies',issues.length],['Safe',counts.safe||0],['Likely safe',counts.likely_safe||0],['Risky',counts.risky||0],['Unsafe',counts.unsafe||0]].map(([label,value])=>h('div',{class:'metric'},h('strong',{},value),h('span',{},label))));
+ $('#issue-count').textContent=`${issues.length} Dependabot issue${issues.length===1?'':'s'}`;const box=$('#results');
+ if(!issues.length){box.replaceChildren(h('div',{class:'empty'},'No Dependabot issues loaded.'));return}
+ box.replaceChildren(...issues.map(issue=>{const ai=issue.lastAiAnalysis;return h('article',{class:'analysis-row'},
+  h('div',{class:'score-cell'},h('strong',{class:ai?`score-${ai.riskLevel==='likely_safe'?'likely':ai.riskLevel}`:''},ai?.safetyScore??'—'),h('span',{},'AI safety score')),
+  h('div',{class:'dependency-cell'},h('div',{class:'row-title'},h('strong',{},issue.packageName),ai?riskTag(ai.riskLevel):h('span',{class:'tag'},'not analyzed')),h('p',{},`→ ${issue.patchedVersion}`),h('code',{},issue.manifestPath),h('small',{},ai?`${ai.confidence} confidence · ${ai.summary}`:'Run AI analysis to assess this upgrade'),h('small',{},ai?`${ai.provider||'cursor'} · ${ai.model||providerModel(defaultProvider())} · ${when(ai.analyzedAt)} · ${issue.analysisHistory?.ai?.length||0} recorded run${issue.analysisHistory?.ai?.length===1?'':'s'}`:'Never analyzed')),
+  h('div',{class:'row-actions'},h('button',{class:'accent',...(!aiReady()?{disabled:''}:{}),onClick:e=>runOne(issue.id,e.currentTarget)},'Run AI analysis'))
+ )}))
+}
+async function load(){settings.repo=$('#repo').value;settings.projectPath=$('#project-path').value;issues=await api(route('/issues'));report=await api(`${route('/dependency-analysis')}?projectPath=${encodeURIComponent(settings.projectPath)}`);render()}
+async function poll(job){$('#progress-wrap').classList.remove('hidden');while(['queued','running'].includes(job.status)){await new Promise(r=>setTimeout(r,750));job=await api(`/api/analysis-jobs/${job.id}`);const done=job.completed+job.failed;$('#progress-bar').style.width=`${job.total?Math.round(done/job.total*100):2}%`;$('#progress-label').textContent=`AI analysis · ${done} of ${job.total}${job.currentIssueId?` · ${job.currentIssueId}`:''}`;}$('#progress-bar').style.width='100%';$('#progress-label').textContent=`Complete: ${job.completed} succeeded, ${job.failed} failed.`;await load()}
+async function runBulk(button){const provider=defaultProvider();await withBusy(button,`Analyzing with ${provider}…`,async()=>poll(await api(route('/analyze-upgrade/bulk'),{method:'POST',body:JSON.stringify({projectPath:settings.projectPath,useAi:true,promptTemplate:settings.prompt,provider})})))}
+async function runOne(id,button){try{await withBusy(button,'Analyzing…',async()=>{await api(`/api/issues/${encodeURIComponent(id)}/analyze-upgrade/ai`,{method:'POST',body:JSON.stringify({repo:settings.repo,projectPath:settings.projectPath,promptTemplate:settings.prompt,provider:defaultProvider()})});await load()})}catch(error){alert(error.message)}}
+$('#load').onclick=()=>load().catch(e=>alert(e.message));$('#run-ai').onclick=e=>runBulk(e.currentTarget).catch(err=>alert(err.message));$('#save-prompt').onclick=()=>{settings.prompt=$('#prompt').value;alert('Prompt saved in this browser.')};$('#reset-prompt').onclick=()=>{$('#prompt').value=template.promptTemplate;settings.prompt=''};if(settings.repo&&settings.projectPath)load().catch(()=>{});
+</script></body></html>

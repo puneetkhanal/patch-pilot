@@ -1,0 +1,96 @@
+.auto-group-dialog {
+  width: min(720px, 94vw);
+  border: none;
+  border-radius: 16px;
+  padding: 0;
+}
+
+.auto-group-dialog::backdrop {
+  background: rgba(20, 30, 22, 0.45);
+}
+
+.auto-group-panel {
+  padding: 22px 24px 24px;
+}
+
+.auto-group-heading {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.auto-group-heading h2 {
+  font: 500 28px Georgia, serif;
+  margin: 4px 0 0;
+}
+
+.auto-group-current {
+  background: #f4f7f4;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  margin: 14px 0 0;
+  padding: 10px 12px;
+}
+
+.auto-group-current strong {
+  color: var(--ink);
+}
+
+.auto-group-error {
+  background: #fae8e6;
+  border: 1px solid #efc7c1;
+  border-radius: 10px;
+  color: var(--red);
+  font-size: 13px;
+  margin-top: 14px;
+  padding: 10px 12px;
+}
+
+.auto-group-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+.auto-group-step-details {
+  margin-top: 8px;
+}
+
+.auto-group-step-details summary {
+  color: var(--green);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  list-style: none;
+  user-select: none;
+}
+
+.auto-group-step-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.auto-group-step-details summary::before {
+  content: '▸ ';
+}
+
+.auto-group-step-details[open] summary::before {
+  content: '▾ ';
+}
+
+.auto-group-detail-body {
+  background: #f8faf7;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 10px;
+  line-height: 1.45;
+  margin: 8px 0 0;
+  max-height: 280px;
+  overflow: auto;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

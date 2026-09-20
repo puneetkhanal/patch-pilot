@@ -1,0 +1,1 @@
+import {describe,it,expect} from 'vitest';import {issueId,issueBranch} from '../src/utils/slug.js';describe('slugs',()=>{it('stable issue id',()=>expect(issueId('npm','lodash','4.17.21')).toBe('issue-npm-lodash-4-17-21'));it('removes .lock branch token',()=>expect(issueBranch('package-lock.json','npm','x','1.0.0')).not.toContain('.lock'));});

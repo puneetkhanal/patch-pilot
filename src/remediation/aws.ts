@@ -1,0 +1,1 @@
+import { spawnSync } from 'node:child_process'; export function awsStatus(required:boolean,profile:string){if(!required)return {required:false,valid:true};const r=spawnSync('aws',['sts','get-caller-identity','--profile',profile],{encoding:'utf8'});return {required:true,valid:r.status===0,profile,error:r.status===0?undefined:(r.stderr||r.stdout).trim()};}

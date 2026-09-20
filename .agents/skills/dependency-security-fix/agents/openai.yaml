@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dependency Security Fix"
+  short_description: "Safely remediate one dependency vulnerability"
+  default_prompt: "Use $dependency-security-fix to remediate this dependency issue and verify the change."
