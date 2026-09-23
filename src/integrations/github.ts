@@ -112,8 +112,8 @@ export class GitHubClient {
     return this.paged<Pull>(`/repos/${owner}/${repo}/pulls?state=open`);
   }
 
-  async pullRequestStatuses(owner: string, repo: string): Promise<PullRequestStatus[]> {
-    const pulls = await this.openPullRequests(owner, repo);
+  async pullRequestStatuses(owner: string, repo: string, numbers?: ReadonlySet<number>): Promise<PullRequestStatus[]> {
+    const pulls = (await this.openPullRequests(owner, repo)).filter(pull => !numbers || numbers.has(pull.number));
     return Promise.all(pulls.map(async pull => {
       const [checks, statuses, reviews] = await Promise.all([
         this.request<{ total_count: number; check_runs: Array<{ status: string; conclusion: string | null }> }>(`/repos/${owner}/${repo}/commits/${pull.head.sha}/check-runs`),

@@ -70,19 +70,37 @@ export function apiRouter(d: ApiDependencies) {
     message: z.string().trim().min(1).max(1000).optional(),
     prNumbers: z.array(z.number().int().positive()).max(25)
   });
+  const pullRequestNumber = (url?: string) => Number(url?.match(/\/pull\/(\d+)(?:$|[/?#])/)?.[1]) || undefined;
+  const patchPilotPullRequests = async (owner: string, name: string) => {
+    const repo = `${owner}/${name}`;
+    const [issues, workItems, jobs] = await Promise.all([
+      d.repo.listIssues(repo),
+      d.repo.listBatches(repo),
+      d.jobs.list(repo)
+    ]);
+    const numbers = new Set<number>();
+    const remember = (url?: string) => {
+      const number = pullRequestNumber(url);
+      if (number) numbers.add(number);
+    };
+    for (const issue of issues) remember(issue.remediation.result?.prUrl);
+    for (const workItem of workItems) remember(workItem.remediation.result?.prUrl);
+    for (const job of jobs) remember(job.result?.prUrl);
+    const prs = (await d.github.pullRequestStatuses(owner, name, numbers)).filter(pr => numbers.has(pr.number));
+    return { repo, issues, workItems, prs };
+  };
   const prepareSlackReview = async (req: any) => {
     const body = slackReviewSchema.parse(req.body || {});
     if (!body.prNumbers.length) throw Object.assign(new Error('Select at least one pull request'), { status: 400 });
-    const repo = `${req.params.owner}/${req.params.repo}`;
     const requested = new Set(body.prNumbers);
-    const prs = (await d.github.pullRequestStatuses(req.params.owner, req.params.repo)).filter(pr => requested.has(pr.number));
+    const tracked = await patchPilotPullRequests(req.params.owner, req.params.repo);
+    const prs = tracked.prs.filter(pr => requested.has(pr.number));
     const found = new Set(prs.map(pr => pr.number));
     const missing = [...requested].filter(number => !found.has(number));
     if (missing.length) throw Object.assign(new Error(`Open pull request(s) not found: ${missing.join(', ')}`), { status: 404 });
-    const [issues, workItems] = await Promise.all([d.repo.listIssues(repo), d.repo.listBatches(repo)]);
     return {
       channel: body.channel,
-      text: buildSlackReviewMessage(repo, prs, issues, workItems, body.message),
+      text: buildSlackReviewMessage(tracked.repo, prs, tracked.issues, tracked.workItems, body.message),
       pullRequests: prs.map(pr => ({ title: pr.title, url: pr.url, status: `${pr.checks.conclusion}; ${pr.reviewState}` }))
     };
   };
@@ -462,12 +480,13 @@ export function apiRouter(d: ApiDependencies) {
   }));
 
   router.get('/repos/:owner/:repo/pull-requests', asyncRoute(async (req: any, res: any) => {
-    const repo = `${req.params.owner}/${req.params.repo}`; const issues = await d.repo.listIssues(repo);
-    const prs = await d.github.pullRequestStatuses(req.params.owner, req.params.repo);
-    for (const pr of prs) pr.issueId = issues.find(issue => issue.pr.branch === pr.branch || issue.pr.number === pr.number)?.id;
-    res.json(prs);
+    const tracked = await patchPilotPullRequests(req.params.owner, req.params.repo);
+    for (const pr of tracked.prs) pr.issueId = tracked.issues.find(issue => issue.pr.branch === pr.branch || issue.pr.number === pr.number)?.id;
+    res.json(tracked.prs);
   }));
-  router.post('/repos/:owner/:repo/pull-requests/refresh', asyncRoute(async (req: any, res: any) => res.json(await d.github.pullRequestStatuses(req.params.owner, req.params.repo))));
+  router.post('/repos/:owner/:repo/pull-requests/refresh', asyncRoute(async (req: any, res: any) => {
+    res.json((await patchPilotPullRequests(req.params.owner, req.params.repo)).prs);
+  }));
   router.post('/repos/:owner/:repo/pull-requests/:number/close', asyncRoute(async (req: any, res: any) => {
     const number = z.coerce.number().int().positive().parse(req.params.number);
     await d.github.closePullRequest(req.params.owner, req.params.repo, number);

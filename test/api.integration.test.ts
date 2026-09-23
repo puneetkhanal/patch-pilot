@@ -49,6 +49,16 @@ describe('HTTP API integration', () => {
     await fs.writeFile(path.join(projectPath, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3, packages: { '': { dependencies: { lodash: '^4.17.20', minimist: '^1.2.7' } }, 'node_modules/lodash': { version: '4.17.20' }, 'node_modules/minimist': { version: '1.2.7' } } }));
 
     repository = new JsonRepository(path.join(directory, 'state.json'));
+    await repository.saveJob({
+      id: 'patchpilot-pr-7',
+      kind: 'create-pr',
+      status: 'succeeded',
+      repo: 'owner/repo',
+      log: 'pr_url: https://example.com/pull/7',
+      result: { prUrl: 'https://example.com/pull/7' },
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z'
+    });
     closedPrNumbers = [];
     slackRequests = [];
     slackFailure = undefined;
@@ -65,7 +75,10 @@ describe('HTTP API integration', () => {
       repositories: async () => [{ fullName: 'owner/repo', private: true, defaultBranch: 'main', updatedAt: '2026-01-01T00:00:00Z' }],
       dependabotAlerts: async () => alerts,
       openPullRequests: async () => [{ number: 7 }],
-      pullRequestStatuses: async () => [{ number: 7, title: 'Security update', url: 'https://example.com/pull/7', branch: 'security-fix/dependabot/apps-web-package-json/npm/lodash-4-17-21', draft: false, reviewState: 'review_required', checks: { total: 2, successful: 1, failed: 0, pending: 1, conclusion: 'pending' }, updatedAt: '2026-01-01T00:00:00Z' }],
+      pullRequestStatuses: async () => [
+        { number: 7, title: 'Security update', url: 'https://example.com/pull/7', branch: 'security-fix/dependabot/apps-web-package-json/npm/lodash-4-17-21', draft: false, reviewState: 'review_required', checks: { total: 2, successful: 1, failed: 0, pending: 1, conclusion: 'pending' }, updatedAt: '2026-01-01T00:00:00Z' },
+        { number: 8, title: 'Unrelated feature', url: 'https://example.com/pull/8', branch: 'feature/unrelated', draft: false, reviewState: 'unknown', checks: { total: 1, successful: 1, failed: 0, pending: 0, conclusion: 'successful' }, updatedAt: '2026-01-02T00:00:00Z' }
+      ],
       findPullRequestByBranch: async () => undefined,
       closePullRequest: async (_owner: string, _repo: string, number: number) => { closedPrNumbers.push(number); },
       applyLabels: async () => ({ labels: [] })
@@ -245,8 +258,11 @@ describe('HTTP API integration', () => {
     expect(tracked.body.ai.history).toHaveLength(0);
     expect(tracked.body.dependencyEngine.latest.analyzedAt).toBe(refreshed.body.analyzedAt);
     const prs = await request('/api/repos/owner/repo/pull-requests');
+    expect(prs.body).toHaveLength(1);
     expect(prs.body[0]).toMatchObject({ number: 7, issueId: 'issue-npm-lodash-4-17-21' });
     expect(prs.body[0].checks.conclusion).toBe('pending');
+    const refreshedPrs = await request('/api/repos/owner/repo/pull-requests/refresh', { method: 'POST', body: '{}' });
+    expect(refreshedPrs.body.map((pr: any) => pr.number)).toEqual([7]);
     const closed = await request('/api/repos/owner/repo/pull-requests/7/close', { method: 'POST', body: '{}' });
     expect(closed).toMatchObject({ status: 200, body: { number: 7, state: 'closed' } });
     expect(closedPrNumbers).toEqual([7]);
@@ -285,6 +301,8 @@ describe('HTTP API integration', () => {
     expect(empty.status).toBe(400);
     const missing = await request('/api/repos/owner/repo/slack-review-request', { method: 'POST', body: JSON.stringify({ prNumbers: [999] }) });
     expect(missing).toMatchObject({ status: 404, body: { error: 'Open pull request(s) not found: 999' } });
+    const unrelated = await request('/api/repos/owner/repo/slack-review-request', { method: 'POST', body: JSON.stringify({ prNumbers: [8] }) });
+    expect(unrelated).toMatchObject({ status: 404, body: { error: 'Open pull request(s) not found: 8' } });
 
     const sent = await request('/api/repos/owner/repo/slack-review-request', { method: 'POST', body: JSON.stringify({ channel: 'C0999999999', prNumbers: [7] }) });
     expect(sent).toMatchObject({ status: 200, body: { ok: true, runId: 'run-slack-test' } });

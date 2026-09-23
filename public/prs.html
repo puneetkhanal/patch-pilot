@@ -1,6 +1,6 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pull requests · PatchPilot</title><link rel="stylesheet" href="/app.css"></head><body>
 <header class="topbar"><a class="brand" href="/"><span class="brand-mark">P</span><span>PatchPilot</span></a><nav><a href="/">Issues</a><a class="active" href="/prs.html">Pull requests</a><a href="/worktrees.html">Worktrees</a></nav></header>
-<main><section class="hero compact"><div><p class="eyebrow">Review queue</p><h1>Open pull requests and live checks.</h1><p>See CI and review state in one view, then ask Cursor to send one pull request or the selected queue through your authenticated Slack MCP server.</p></div><div id="slack-status" class="status-pill">Checking Slack…</div></section>
+<main><section class="hero compact"><div><p class="eyebrow">Review queue</p><h1>PatchPilot pull requests and live checks.</h1><p>See CI and review state for open pull requests created by PatchPilot, then ask Cursor to send one pull request or the selected queue through your authenticated Slack MCP server.</p></div><div id="slack-status" class="status-pill">Checking Slack…</div></section>
 <section class="control-panel"><label>Repository<input id="repo" placeholder="owner/repository"></label><button class="primary" id="refresh">Refresh PR status</button><label>Slack channel ID<input id="channel" placeholder="C0123456789"></label><button id="send-slack">Send selected to Slack</button></section><div id="notice" class="notice hidden"></div><div class="table-wrap" style="margin-top:18px"><table><thead><tr><th></th><th>Pull request</th><th>Branch</th><th>Checks</th><th>Review</th><th>Updated</th><th>Actions</th></tr></thead><tbody id="rows"></tbody></table></div></main>
 <dialog id="slack-progress-dialog" class="slack-progress-dialog"><div class="dialog-head"><div><p class="eyebrow">Slack review delivery</p><h2>Cursor agent progress</h2></div><button type="button" id="close-slack-progress">Close</button></div><p id="slack-progress-summary" class="slack-progress-summary">Starting…</p><ol id="slack-progress-steps" class="slack-progress-steps"></ol></dialog>
 <script type="module">
@@ -158,7 +158,7 @@ async function load() {
       h('td', {}, h('div', { class: 'card-actions' }, slackButton, closeButton))
     );
   }));
-  if (!prs.length) rows.append(h('tr', {}, h('td', { colspan: '7' }, 'No open pull requests.')));
+  if (!prs.length) rows.append(h('tr', {}, h('td', { colspan: '7' }, 'No open pull requests created by PatchPilot.')));
 }
 
 async function closePr(pr, button) {
