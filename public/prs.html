@@ -4,7 +4,7 @@
 <section class="control-panel"><label>Repository<input id="repo" placeholder="owner/repository"></label><button class="primary" id="refresh">Refresh PR status</button><label>Slack channel ID<input id="channel" placeholder="C0123456789"></label><button id="send-slack">Send selected to Slack</button></section><div id="notice" class="notice hidden"></div><div class="table-wrap" style="margin-top:18px"><table><thead><tr><th></th><th>Pull request</th><th>Branch</th><th>Checks</th><th>Review</th><th>Updated</th><th>Actions</th></tr></thead><tbody id="rows"></tbody></table></div></main>
 <dialog id="slack-progress-dialog" class="slack-progress-dialog"><div class="dialog-head"><div><p class="eyebrow">Slack review delivery</p><h2>Cursor agent progress</h2></div><button type="button" id="close-slack-progress">Close</button></div><p id="slack-progress-summary" class="slack-progress-summary">Starting…</p><ol id="slack-progress-steps" class="slack-progress-steps"></ol></dialog>
 <script type="module">
-import { $, api, h, installRepoControls, settings, splitRepo, withBusy } from './common.js';
+import { $, api, confirmDialog, h, installRepoControls, settings, splitRepo, withBusy } from './common.js';
 
 let prs = [];
 const selected = new Set();
@@ -162,7 +162,12 @@ async function load() {
 }
 
 async function closePr(pr, button) {
-  if (!confirm(`Close pull request #${pr.number} — ${pr.title}?`)) return;
+  if (!await confirmDialog(`Pull request #${pr.number} — ${pr.title} will be closed on GitHub.`, {
+    eyebrow: 'Pull request',
+    title: `Close pull request #${pr.number}?`,
+    confirmLabel: 'Close pull request',
+    destructive: true
+  })) return;
   try {
     await withBusy(button, 'Closing…', async () => {
       await api(route(`/pull-requests/${pr.number}/close`), { method: 'POST', body: '{}' });

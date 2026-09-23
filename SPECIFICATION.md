@@ -510,7 +510,6 @@ The versioned planner contract, proposed v2 prompt, current-gap analysis, and ac
 | `PORT` | No | HTTP port; default 4000 |
 | `ORCHESTRATOR_DEFAULT_REPO` | No | Default `owner/repo` |
 | `ORCHESTRATOR_DEFAULT_PROJECT_PATH` | No | Default local clone |
-| `GITHUB_REPOSITORIES_ROOT` | No | Initial parent directory for automatic local GitHub clone discovery |
 | `UPGRADE_ANALYSIS_PROJECT_PATH` | No | Analysis clone fallback |
 | `DEPENDABOT_FIX_REPO_ROOT` | No | Default repository root |
 | `DEPENDABOT_FIX_CACHE_ROOT` | No | Clone cache location |

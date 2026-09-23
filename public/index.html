@@ -30,12 +30,12 @@
         <span class="field-label" id="repository-label">GitHub repository</span>
         <button class="repository-trigger" id="repository-trigger" type="button" aria-labelledby="repository-label repository-value" aria-haspopup="listbox" aria-expanded="false" aria-controls="repository-menu">
           <span class="repository-mark" aria-hidden="true">GH</span>
-          <span class="repository-trigger-copy"><strong id="repository-value">Choose a repository</strong><small id="repository-detail">Search local clones or GitHub</small></span>
+          <span class="repository-trigger-copy"><strong id="repository-value">Choose a project</strong><small id="repository-detail">Only projects added in Settings</small></span>
           <span class="repository-chevron" aria-hidden="true">⌄</span>
         </button>
         <input id="repo" type="hidden">
         <div class="repository-menu hidden" id="repository-menu">
-          <div class="repository-search-wrap"><span aria-hidden="true">⌕</span><input id="repository-search" type="search" placeholder="Search repositories…" aria-label="Search repositories" autocomplete="off"></div>
+          <div class="repository-search-wrap"><span aria-hidden="true">⌕</span><input id="repository-search" type="search" placeholder="Search selected projects…" aria-label="Search selected projects" autocomplete="off"></div>
           <div class="repository-options" id="repository-options" role="listbox" aria-labelledby="repository-label"></div>
           <button class="repository-settings-link" id="repository-settings-link" type="button">Manage repository folders in Settings</button>
         </div>
@@ -105,13 +105,13 @@
   </dialog>
   <dialog id="settings-dialog" class="settings-dialog">
     <form method="dialog" class="dialog-head"><div><p class="eyebrow">Local repositories</p><h2>Settings</h2></div><button value="cancel">Close</button></form>
-    <p class="settings-copy">Choose the parent folder containing your GitHub clones and the Cursor skills directory used for AI vulnerability fixes.</p>
-    <label>Repositories root path<input id="repositories-root" placeholder="/path/to/github/projects" autocomplete="off"></label>
-    <label>Cursor skills directory<input id="cursor-skills-directory" placeholder="/path/to/.cursor/skills" autocomplete="off"></label>
-    <div class="detail-actions"><button id="browse-cursor-skills" type="button">Browse skills</button><span id="cursor-skills-result" class="muted-text"></span></div>
-    <label>Default Cursor remediation skill<select id="default-cursor-skill"><option value="">No default Cursor skill</option></select></label>
-    <div class="detail-actions"><button id="save-settings" class="primary" type="button">Save and scan</button><span id="settings-result" class="muted-text"></span></div>
+    <p class="settings-copy">Add only the GitHub projects you want PatchPilot to manage. PatchPilot will not scan a parent folder or list every repository in your GitHub account.</p>
+    <div class="settings-project-heading"><div><strong>Selected projects</strong><small>Choose each local Git repository individually.</small></div><button id="add-project" class="accent" type="button">Browse and add project</button></div>
     <div id="discovered-repositories" class="discovered-list"></div>
+    <label>Cursor skills folder<div class="settings-path-control"><input id="cursor-skills-directory" placeholder="/path/to/.cursor/skills" autocomplete="off"><button id="choose-cursor-skills-directory" type="button">Browse…</button></div></label>
+    <div id="cursor-skills-result" class="settings-field-result muted-text"></div>
+    <label>Default Cursor remediation skill<select id="default-cursor-skill"><option value="">No default Cursor skill</option></select></label>
+    <div class="detail-actions"><button id="save-settings" class="primary" type="button">Save selected projects</button><span id="settings-result" class="muted-text"></span></div>
   </dialog>
   <script type="module" src="/app.js"></script>
 </body>

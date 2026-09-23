@@ -15,6 +15,7 @@ import { WorktreeService } from './services/worktrees.js';
 import { LocalRepositoryService } from './services/localRepositories.js';
 import { SettingsService } from './services/settings.js';
 import { FixAgentSkillService } from './services/fixAgentSkills.js';
+import { NativeDirectoryPicker } from './services/directoryPicker.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(here, '..');
@@ -22,7 +23,8 @@ try { loadEnvFile(path.join(projectRoot, '.env')); } catch (error: any) { if (er
 const config = loadConfig();
 const repository = new JsonRepository();
 const github = new GitHubClient(config.ghToken, config.githubApiBase);
-const settings = new SettingsService(path.join(projectRoot, '.orchestrator-settings.json'), { repositoriesRoot: config.repositoriesRoot });
+const configuredProjectPath = config.defaultProjectPath || config.repoRoot;
+const settings = new SettingsService(path.join(projectRoot, '.orchestrator-settings.json'), { projectPaths: configuredProjectPath ? [configuredProjectPath] : [] });
 const batches = new BatchService(repository);
 const app = createApp({
   config,
@@ -37,7 +39,8 @@ const app = createApp({
   groupingJobs: new GroupingJobManager(repository, batches, config),
   settings,
   localRepositories: new LocalRepositoryService(),
-  fixAgentSkills: new FixAgentSkillService(config)
+  fixAgentSkills: new FixAgentSkillService(config),
+  directoryPicker: new NativeDirectoryPicker()
 }, path.resolve(here, '../public'));
 
 app.listen(config.port, () => console.log(`PatchPilot listening on http://localhost:${config.port}`));

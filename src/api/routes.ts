@@ -25,6 +25,7 @@ import { collectPrimaryBatchAlerts } from '../services/packageTargetDedup.js';
 import { buildSlackReviewMessage } from '../services/slackReview.js';
 import { defaultWorkItemGroupingPrompt } from '../services/workItemGrouping.js';
 import { aiProviderSchema, assertProviderConfigured, configuredAiProviders, resolveProvider } from '../services/aiProvider.js';
+import { DirectoryPicker } from '../services/directoryPicker.js';
 
 export type ApiDependencies = {
   config: Config;
@@ -40,6 +41,7 @@ export type ApiDependencies = {
   settings: SettingsService;
   localRepositories: LocalRepositoryService;
   fixAgentSkills: FixAgentSkillService;
+  directoryPicker?: DirectoryPicker;
 };
 
 const repoParts = (repo: string) => {
@@ -125,23 +127,32 @@ export function apiRouter(d: ApiDependencies) {
   }));
   router.get('/github/repos', asyncRoute(async (_req: any, res: any) => res.json(await d.github.repositories())));
   router.get('/settings', asyncRoute(async (_req: any, res: any) => res.json(await d.settings.get())));
+  router.post('/system/directory-picker', asyncRoute(async (req: any, res: any) => {
+    if (!d.directoryPicker) throw Object.assign(new Error('System folder chooser is unavailable. Enter the path manually instead.'), { status: 501 });
+    const { purpose } = z.object({ purpose: z.enum(['project', 'cursor-skills']) }).parse(req.body || {});
+    const selected = await d.directoryPicker.pick(purpose);
+    res.json(selected ? { path: selected, cancelled: false } : { path: null, cancelled: true });
+  }));
   router.put('/settings', asyncRoute(async (req: any, res: any) => {
     const body = z.object({
-      repositoriesRoot: z.string().min(1),
+      projectPaths: z.array(z.string().trim().min(1)).max(100),
       cursorSkillsDirectory: z.string().min(1).optional().nullable(),
       defaultCursorSkill: z.string().min(1).optional().nullable()
     }).parse(req.body);
     const cursorSkillsDirectory = body.cursorSkillsDirectory || undefined;
     const defaultCursorSkill = body.defaultCursorSkill || undefined;
     if (defaultCursorSkill) await d.fixAgentSkills.resolve({ provider: 'cursor', skill: defaultCursorSkill }, cursorSkillsDirectory);
-    const repositories = await d.localRepositories.discover(body.repositoriesRoot);
-    const settings = await d.settings.update({ repositoriesRoot: body.repositoriesRoot, cursorSkillsDirectory, defaultCursorSkill });
+    const repositories = await d.localRepositories.selected(body.projectPaths);
+    const settings = await d.settings.update({ projectPaths: repositories.map(repository => repository.path), cursorSkillsDirectory, defaultCursorSkill });
     res.json({ settings, repositories });
+  }));
+  router.post('/local-repositories/inspect', asyncRoute(async (req: any, res: any) => {
+    const { projectPath } = z.object({ projectPath: z.string().trim().min(1) }).parse(req.body || {});
+    res.json(await d.localRepositories.inspect(projectPath));
   }));
   router.get('/local-repositories', asyncRoute(async (_req: any, res: any) => {
     const settings = await d.settings.get();
-    if (!settings.repositoriesRoot) return res.json([]);
-    res.json(await d.localRepositories.discover(settings.repositoriesRoot));
+    res.json(await d.localRepositories.selected(settings.projectPaths || []));
   }));
 
   router.get('/repos/:owner/:repo/issues', asyncRoute(async (req: any, res: any) => {
@@ -334,6 +345,23 @@ export function apiRouter(d: ApiDependencies) {
     const upgradeAnalysesByAlert = Object.fromEntries(
       (issues as TrackerIssue[]).flatMap(issue => issue.lastUpgradeAnalysis ? [[String(issue.alerts[0]), issue.lastUpgradeAnalysis]] : [])
     );
+    const suggestedFixesByAlert = Object.fromEntries(
+      (issues as TrackerIssue[]).map(issue => [String(issue.alerts[0]), {
+        workItem: {
+          id: batch.id,
+          safetySummary: batch.grouping?.safetySummary,
+          rationale: batch.grouping?.rationale || [],
+          analyzedAt: batch.grouping?.analyzedAt,
+          model: batch.grouping?.model
+        },
+        target: {
+          packageName: issue.packageName,
+          targetVersion: issue.patchedVersion,
+          manifestPath: issue.manifestPath
+        },
+        aiAnalysis: issue.lastAiAnalysis
+      }])
+    );
     const job = d.jobs.start({
       kind, repo: batch.repo, batchId: batch.id, agent,
       command: path.resolve('scripts/remediation/dependabot-batch-fix.sh'),
@@ -351,7 +379,8 @@ export function apiRouter(d: ApiDependencies) {
         CLAUDE_FIX_COMMAND: d.config.claudeFixCommand,
         CURSOR_API_KEY: d.config.cursorApiKey,
         CURSOR_MODEL: d.config.cursorModel,
-        REMEDIATION_BATCH_UPGRADE_ANALYSES_JSON: JSON.stringify(upgradeAnalysesByAlert)
+        REMEDIATION_BATCH_UPGRADE_ANALYSES_JSON: JSON.stringify(upgradeAnalysesByAlert),
+        REMEDIATION_BATCH_SUGGESTED_FIXES_JSON: JSON.stringify(suggestedFixesByAlert)
       },
       onComplete: async completed => {
         const current = await d.repo.getBatch(batch.id);

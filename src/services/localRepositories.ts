@@ -5,8 +5,6 @@ import { promisify } from 'node:util';
 import { LocalGitHubRepository } from '../domain/types.js';
 
 const exec = promisify(execFile);
-const ignored = new Set(['.git', 'node_modules', '.dependabot-worktrees', 'dist', 'build', 'coverage', '.cache']);
-
 function githubRepo(remote: string) {
   const normalized = remote.trim().replace(/\.git$/, '');
   const match = normalized.match(/(?:github\.com[/:])([^/\s:]+)\/([^/\s]+)$/i);
@@ -14,35 +12,28 @@ function githubRepo(remote: string) {
 }
 
 export class LocalRepositoryService {
-  constructor(private maxDepth = 4, private maxDirectories = 2000) {}
-
-  async discover(root: string): Promise<LocalGitHubRepository[]> {
-    const absoluteRoot = await fs.realpath(path.resolve(root));
-    if (!(await fs.stat(absoluteRoot)).isDirectory()) throw new Error('Repositories root must be a directory');
-    const found: LocalGitHubRepository[] = [];
-    const queue: Array<{ directory: string; depth: number }> = [{ directory: absoluteRoot, depth: 0 }];
-    let visited = 0;
-    while (queue.length) {
-      const current = queue.shift()!;
-      if (++visited > this.maxDirectories) throw new Error(`Repository scan stopped after ${this.maxDirectories} directories; choose a narrower root path`);
-      let entries;
-      try { entries = await fs.readdir(current.directory, { withFileTypes: true }); } catch { continue; }
-      const gitEntry = entries.find(entry => entry.name === '.git' && (entry.isDirectory() || entry.isFile()));
-      if (gitEntry) {
-        try {
-          const { stdout } = await exec('git', ['-C', current.directory, 'config', '--get', 'remote.origin.url']);
-          const remoteUrl = stdout.trim();
-          const repo = githubRepo(remoteUrl);
-          if (repo) found.push({ repo, name: path.basename(current.directory), path: current.directory, relativePath: path.relative(absoluteRoot, current.directory) || '.', remoteUrl });
-        } catch { /* A local repository without an origin is not a selectable GitHub repository. */ }
-        continue;
-      }
-      if (current.depth >= this.maxDepth) continue;
-      for (const entry of entries) {
-        if (!entry.isDirectory() || entry.isSymbolicLink() || ignored.has(entry.name) || entry.name.startsWith('.')) continue;
-        queue.push({ directory: path.join(current.directory, entry.name), depth: current.depth + 1 });
-      }
+  async inspect(directory: string): Promise<LocalGitHubRepository> {
+    const absolutePath = await fs.realpath(path.resolve(directory));
+    if (!(await fs.stat(absolutePath)).isDirectory()) throw new Error('Selected project must be a directory');
+    try {
+      await fs.stat(path.join(absolutePath, '.git'));
+    } catch {
+      throw new Error('Selected folder is not a Git repository');
     }
-    return found.sort((a, b) => a.repo.localeCompare(b.repo));
+    let remoteUrl = '';
+    try {
+      ({ stdout: remoteUrl } = await exec('git', ['-C', absolutePath, 'config', '--get', 'remote.origin.url'], { encoding: 'utf8' }));
+    } catch {
+      throw new Error('Selected repository does not have an origin remote');
+    }
+    remoteUrl = remoteUrl.trim();
+    const repo = githubRepo(remoteUrl);
+    if (!repo) throw new Error('Selected repository origin must point to GitHub');
+    return { repo, name: path.basename(absolutePath), path: absolutePath, relativePath: '.', remoteUrl };
+  }
+
+  async selected(projectPaths: string[]) {
+    const repositories = await Promise.all([...new Set(projectPaths)].map(projectPath => this.inspect(projectPath)));
+    return repositories.sort((a, b) => a.repo.localeCompare(b.repo));
   }
 }

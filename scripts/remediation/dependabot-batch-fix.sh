@@ -80,7 +80,9 @@ if [[ $skip_fix == 0 ]]; then
       patched="$(node -e 'const x=JSON.parse(process.argv[1]); console.log(x.security_vulnerability.first_patched_version?.identifier || "")' "$json")"
       bump_manifest="$(resolve_npm_manifest "$manifest")"
       analysis_json="$(node -e 'const map=JSON.parse(process.env.REMEDIATION_BATCH_UPGRADE_ANALYSES_JSON||"{}");const entry=map[process.argv[1]];if(entry)process.stdout.write(JSON.stringify(entry));' "$alert")"
+      suggested_fix_json="$(node -e 'const map=JSON.parse(process.env.REMEDIATION_BATCH_SUGGESTED_FIXES_JSON||"{}");const entry=map[process.argv[1]];if(entry)process.stdout.write(JSON.stringify(entry));' "$alert")"
       REMEDIATION_DEPENDENCY_ANALYSIS_JSON="${analysis_json:-No dependency-engine result was supplied.}" \
+      REMEDIATION_SUGGESTED_FIX_JSON="${suggested_fix_json:-No AI work-item recommendation was supplied.}" \
         node "$script_dir/run-fix-agent.mjs" --provider "$REMEDIATION_AGENT_PROVIDER" --skill "$REMEDIATION_AGENT_SKILL" --skill-file "$REMEDIATION_AGENT_SKILL_FILE" --repo "$repo" --alert "$alert" --package "$package_name" --target "$patched" --manifest "$bump_manifest"
     done
   fi

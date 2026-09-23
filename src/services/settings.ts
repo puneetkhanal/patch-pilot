@@ -3,12 +3,12 @@ import path from 'node:path';
 import { z } from 'zod';
 
 export interface AppSettings {
-  repositoriesRoot?: string;
+  projectPaths?: string[];
   cursorSkillsDirectory?: string;
   defaultCursorSkill?: string;
 }
 const settingsSchema = z.object({
-  repositoriesRoot: z.string().min(1).optional(),
+  projectPaths: z.array(z.string().min(1)).max(100).optional(),
   cursorSkillsDirectory: z.string().min(1).optional(),
   defaultCursorSkill: z.string().min(1).optional()
 });

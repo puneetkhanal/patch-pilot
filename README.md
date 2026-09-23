@@ -81,15 +81,11 @@ npm run dev
 
 Open `http://localhost:4000`.
 
-## Repository discovery
+## Project selection
 
-Open **Settings** in the application and enter the parent directory containing your local GitHub clones, for example `/path/to/projects`. The server scans nested folders for git repositories whose `origin` points to GitHub. Selecting a discovered repository automatically fills its local clone path and refreshes its supported vulnerability alerts. The current adapter fetches open npm alerts from GitHub Dependabot.
+Open **Settings** and use **Browse and add project** for each local GitHub clone you want PatchPilot to manage. PatchPilot does not recursively scan a parent folder and does not populate the selector with every repository in your GitHub account. Selecting an added project fills its local clone path and refreshes its supported vulnerability alerts. The current adapter fetches open npm alerts from GitHub Dependabot.
 
-The root path is stored in the gitignored `.orchestrator-settings.json` file. It can also be supplied initially with:
-
-```text
-GITHUB_REPOSITORIES_ROOT=/path/to/projects
-```
+The selected project paths are stored in the gitignored `.orchestrator-settings.json` file. `ORCHESTRATOR_DEFAULT_PROJECT_PATH` can supply one initial project.
 
 The preferred GitHub authentication is the GitHub CLI:
 
@@ -178,7 +174,7 @@ Skills are discovered by provider from:
 .cursor/skills/<skill>/SKILL.md   # Cursor
 ```
 
-The Settings dialog can point Cursor at any directory whose immediate child folders contain `SKILL.md` files. After browsing that directory, choose a default Cursor remediation skill and save. Issue and work-item AI fixes then use that saved skill automatically; an explicit API `agent` selection still overrides the default for an individual run.
+The Settings dialog can point Cursor at any directory whose immediate child folders contain `SKILL.md` files. Use **Browse…** to choose that directory, choose a default Cursor remediation skill, and save. Issue and work-item AI fixes then use that saved skill automatically; an explicit API `agent` selection still overrides the default for an individual run.
 
 PatchPilot includes `.agents/skills/dependency-security-fix/SKILL.md` for Codex testing. Codex is enabled by default and uses the local Codex login or `CODEX_API_KEY`; the runner uses `workspace-write`, disables approval prompts, and disables tool network access. Claude remains disabled until explicitly enabled, and Cursor requires `CURSOR_API_KEY`.
 

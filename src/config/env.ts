@@ -4,7 +4,6 @@ export interface Config {
   githubApiBase: string;
   defaultRepo?: string;
   defaultProjectPath?: string;
-  repositoriesRoot?: string;
   analysisProjectPath?: string;
   repoRoot?: string;
   fixCacheRoot?: string;
@@ -46,7 +45,6 @@ export function loadConfig(env = process.env): Config {
     githubApiBase: env.GITHUB_API_BASE_URL || 'https://api.github.com',
     defaultRepo: env.ORCHESTRATOR_DEFAULT_REPO,
     defaultProjectPath: env.ORCHESTRATOR_DEFAULT_PROJECT_PATH,
-    repositoriesRoot: env.GITHUB_REPOSITORIES_ROOT,
     analysisProjectPath: env.UPGRADE_ANALYSIS_PROJECT_PATH,
     repoRoot: env.DEPENDABOT_FIX_REPO_ROOT,
     fixCacheRoot: env.DEPENDABOT_FIX_CACHE_ROOT,

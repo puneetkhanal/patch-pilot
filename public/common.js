@@ -29,6 +29,49 @@ export function h(tag, props = {}, ...children) {
   for (const child of children.flat(Infinity)) element.append(child instanceof Node ? child : document.createTextNode(String(child ?? '')));
   return element;
 }
+function appDialog(message, options = {}) {
+  const {
+    title = 'PatchPilot',
+    eyebrow = 'Confirmation',
+    confirmLabel = 'OK',
+    cancelLabel,
+    destructive = false
+  } = options;
+  return new Promise(resolve => {
+    const dialog = h('dialog', { class: 'app-dialog', 'aria-labelledby': 'app-dialog-title' });
+    const finish = confirmed => {
+      dialog.remove();
+      resolve(confirmed);
+    };
+    const form = h('form', { method: 'dialog', class: 'app-dialog-panel' },
+      h('div', { class: 'app-dialog-heading' },
+        h('div', { class: 'app-dialog-icon', 'aria-hidden': 'true' }, destructive ? '!' : 'P'),
+        h('div', {},
+          h('p', { class: 'eyebrow' }, eyebrow),
+          h('h2', { id: 'app-dialog-title' }, title)
+        )
+      ),
+      h('p', { class: 'app-dialog-message' }, message),
+      h('div', { class: 'app-dialog-actions' },
+        cancelLabel ? h('button', { type: 'submit', value: 'cancel' }, cancelLabel) : null,
+        h('button', { type: 'submit', value: 'confirm', class: destructive ? 'danger-confirm' : 'primary' }, confirmLabel)
+      )
+    );
+    dialog.append(form);
+    dialog.addEventListener('click', event => {
+      if (event.target === dialog) dialog.close('cancel');
+    });
+    dialog.addEventListener('close', () => finish(dialog.returnValue === 'confirm'), { once: true });
+    document.body.append(dialog);
+    dialog.showModal();
+  });
+}
+export function confirmDialog(message, options = {}) {
+  return appDialog(message, { title: 'Confirm action', confirmLabel: 'Confirm', cancelLabel: 'Cancel', ...options });
+}
+export function alertDialog(message, options = {}) {
+  return appDialog(message, { eyebrow: 'PatchPilot', title: 'Notice', confirmLabel: 'Got it', ...options });
+}
 export function setBusy(button, busy, text = 'Working…') { if (!button) return; if (busy) { button.dataset.label = button.textContent; button.textContent = text; button.disabled = true; } else { button.textContent = button.dataset.label || button.textContent; button.disabled = false; } }
 export function issueRisk(issue) { return issue?.lastAiAnalysis?.riskLevel || 'not_analyzed'; }
 export function matchesRisk(issue, risk = '') { return !risk || issueRisk(issue) === risk; }

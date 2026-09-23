@@ -1,4 +1,4 @@
 interface:
   display_name: "Dependency Security Fix"
-  short_description: "Safely remediate one dependency vulnerability"
-  default_prompt: "Use $dependency-security-fix to remediate this dependency issue and verify the change."
+  short_description: "Apply PatchPilot's recommended package updates"
+  default_prompt: "Use $dependency-security-fix to apply the supplied PatchPilot fix targets, regenerate package-lock.json, and verify the requested versions without repeating dependency analysis."

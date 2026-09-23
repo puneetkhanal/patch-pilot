@@ -24,10 +24,23 @@
   line-height: 1.5;
   font-size: 14px;
 }
+.settings-project-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 20px 0 10px; }
+.settings-project-heading strong, .settings-project-heading small { display: block; }
+.settings-project-heading small { color: var(--muted); font-size: 12px; margin-top: 4px; }
 
+.settings-dialog > label { margin-top: 20px; }
 .settings-dialog label input, .settings-dialog label select { width: 100%; }
+.settings-path-control { display: flex; gap: 8px; align-items: center; }
+.settings-path-control input { min-width: 0; flex: 1; }
+.settings-path-control button { flex: 0 0 auto; }
 .muted-text { align-self: center; color: var(--muted); font-size: 12px; }
-.discovered-list { display: grid; gap: 7px; max-height: 300px; overflow: auto; }
-.discovered-item { padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: #f8faf7; }
+.settings-field-result { min-height: 18px; margin-top: 7px; }
+.discovered-list { display: grid; gap: 7px; max-height: 300px; overflow: auto; margin-bottom: 4px; }
+.discovered-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: #f8faf7; }
+.discovered-item-copy { min-width: 0; flex: 1; }
 .discovered-item strong { display: block; font-size: 13px; }
 .discovered-item span { display: block; color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; }
+.discovered-item-actions { display: flex; gap: 7px; flex: 0 0 auto; }
+.discovered-item-actions button { padding: 7px 9px; font-size: 12px; }
+.settings-dialog > .detail-actions { margin-top: 20px; margin-bottom: 0; }
+@media(max-width:560px) { .settings-path-control,.settings-project-heading { align-items: stretch; flex-direction: column; }.discovered-item { align-items: stretch; flex-direction: column; }.discovered-item-actions button { flex: 1; } }

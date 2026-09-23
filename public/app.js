@@ -1,6 +1,6 @@
-import { $, api, buildAnalysisMemberProgress, h, installRepoControls, issueRisk, matchesRisk, setBusy, settings, splitRepo, workflowLogTail } from './common.js';
+import { $, api, buildAnalysisMemberProgress, confirmDialog, h, installRepoControls, issueRisk, matchesRisk, setBusy, settings, splitRepo, workflowLogTail } from './common.js';
 
-const state = { issues: [], workItems: [], selected: new Set(), view: 'work-items', filter: '', risk: '', search: '', defaults: {}, appSettings: {}, localRepositories: [], githubRepositories: [], fixAgentSkills: [], groupingPromptTemplate: '', groupingPromptVersion: '', autoGroupExpandedSteps: new Set(), workflowAction: null, workflowSnapshots: {} };
+const state = { issues: [], workItems: [], selected: new Set(), view: 'work-items', filter: '', risk: '', search: '', defaults: {}, appSettings: {}, localRepositories: [], fixAgentSkills: [], groupingPromptTemplate: '', groupingPromptVersion: '', autoGroupExpandedSteps: new Set(), workflowAction: null, workflowSnapshots: {} };
 const states = ['NEW','TRIAGED','PLANNED_BATCH','IN_PROGRESS','READY_FOR_REVIEW','MERGED','RESOLVED','BLOCKED','CLOSED'];
 function notice(message, error = false) { const el = $('#notice'); el.textContent = message; el.className = `notice${error ? ' error' : ''}`; setTimeout(() => el.classList.add('hidden'), 7000); }
 function repoPath(suffix = '') { const [owner, repo] = splitRepo(); return `/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}${suffix}`; }
@@ -48,7 +48,12 @@ function workItemHumanReviewTag(workItem) {
 async function confirmRiskyFix(blocked) {
   if (!blocked.length) return true;
   const names = blocked.map(issue => `${issue.packageName} (${memberRisk(issue).replaceAll('_', ' ')})`).join(', ');
-  return confirm(`These work-item members are flagged for review: ${names}.\n\nFix anyway?`);
+  return confirmDialog(`These work-item members are flagged for review: ${names}.\n\nFix anyway?`, {
+    eyebrow: 'Human review required',
+    title: 'Fix flagged dependencies?',
+    confirmLabel: 'Fix anyway',
+    destructive: true
+  });
 }
 function aiStatusLabel() {
   const providers = aiProviders();
@@ -62,16 +67,14 @@ async function init() {
   state.defaults = await api('/api/config/defaults'); installRepoControls(state.defaults);
   $('#connection').textContent = `${state.defaults.githubAuth?.configured ? state.defaults.githubAuth.message : 'GitHub login needed'} · ${aiStatusLabel()}`;
   syncAiProviderUi();
-  const [appSettings, localRepositories, githubRepositories, fixAgentSkills, groupingPrompt] = await Promise.all([
+  const [appSettings, localRepositories, fixAgentSkills, groupingPrompt] = await Promise.all([
     api('/api/settings').catch(() => ({})),
     api('/api/local-repositories').catch(() => []),
-    api('/api/github/repos').catch(() => []),
     api('/api/remediation/fix-agent-skills').catch(() => []),
     api('/api/work-items/grouping-prompt').catch(() => ({ promptTemplate: '', configured: false }))
   ]);
   state.appSettings = appSettings;
   state.localRepositories = localRepositories;
-  state.githubRepositories = githubRepositories;
   state.fixAgentSkills = fixAgentSkills;
   state.groupingPromptTemplate = groupingPrompt.promptTemplate || '';
   state.groupingPromptVersion = groupingPrompt.version || 'v1';
@@ -79,15 +82,21 @@ async function init() {
   settings.groupingPromptVersion = state.groupingPromptVersion;
   $('#grouping-prompt').value = settings.groupingPrompt || state.groupingPromptTemplate;
   $('#group-size').value = String(settings.groupSize);
-  $('#repositories-root').value = appSettings.repositoriesRoot || '';
   $('#cursor-skills-directory').value = appSettings.cursorSkillsDirectory || '';
+  if (settings.repo && !state.localRepositories.some(repository => repository.repo === settings.repo)) {
+    settings.repo = '';
+    settings.projectPath = '';
+    $('#repo').value = '';
+    $('#project-path').value = '';
+  }
   populateRepositories();
   populateDefaultCursorSkills(appSettings.defaultCursorSkill);
   renderDiscoveredRepositories();
   applyLocalSelection(settings.repo);
   bind();
-  if (settings.repo) await load(); else renderEmpty('Open Settings, choose your repositories root, then select a GitHub repository.');
-  if (!appSettings.repositoriesRoot) $('#settings-dialog').showModal();
+  if (settings.repo && state.localRepositories.some(repository => repository.repo === settings.repo)) await load();
+  else renderEmpty('Open Settings, add a project, then select it to begin.');
+  if (!state.localRepositories.length) $('#settings-dialog').showModal();
 }
 
 function bind() {
@@ -121,27 +130,21 @@ function bind() {
   });
   $('#project-path').addEventListener('change', () => settings.projectPath = $('#project-path').value);
   $('#settings-button').addEventListener('click', () => $('#settings-dialog').showModal());
-  $('#browse-cursor-skills').addEventListener('click', async event => action(event.currentTarget, 'Browsing…', async () => {
-    const directory = $('#cursor-skills-directory').value.trim();
-    if (!directory) throw new Error('Enter the directory containing Cursor skill folders.');
-    state.fixAgentSkills = await api(`/api/remediation/fix-agent-skills?cursorSkillsDirectory=${encodeURIComponent(directory)}`);
-    populateDefaultCursorSkills(state.appSettings.defaultCursorSkill);
-    const count = state.fixAgentSkills.filter(item => item.provider === 'cursor').length;
-    $('#cursor-skills-result').textContent = `Found ${count} Cursor ${count === 1 ? 'skill' : 'skills'}.`;
-  }));
-  $('#save-settings').addEventListener('click', async event => action(event.currentTarget, 'Scanning folders…', async () => {
-    const repositoriesRoot = $('#repositories-root').value.trim();
-    if (!repositoriesRoot) throw new Error('Enter the parent folder containing your GitHub repositories.');
+  $('#add-project').addEventListener('click', event => addSelectedProject(event.currentTarget));
+  $('#choose-cursor-skills-directory').addEventListener('click', event => chooseSettingsDirectory('cursor-skills', '#cursor-skills-directory', event.currentTarget));
+  $('#save-settings').addEventListener('click', async event => action(event.currentTarget, 'Saving…', async () => {
+    const projectPaths = state.localRepositories.map(repository => repository.path);
+    if (!projectPaths.length) throw new Error('Add at least one project for PatchPilot to manage.');
     const cursorSkillsDirectory = $('#cursor-skills-directory').value.trim() || null;
     const defaultCursorSkill = $('#default-cursor-skill').value || null;
-    const result = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ repositoriesRoot, cursorSkillsDirectory, defaultCursorSkill }) });
+    const result = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ projectPaths, cursorSkillsDirectory, defaultCursorSkill }) });
     state.appSettings = result.settings;
     state.localRepositories = result.repositories;
     state.fixAgentSkills = await api('/api/remediation/fix-agent-skills');
     populateRepositories();
     populateDefaultCursorSkills(state.appSettings.defaultCursorSkill);
     renderDiscoveredRepositories();
-    $('#settings-result').textContent = `Saved. Found ${result.repositories.length} GitHub ${result.repositories.length === 1 ? 'repository' : 'repositories'}.`;
+    $('#settings-result').textContent = `Saved ${result.repositories.length} selected ${result.repositories.length === 1 ? 'project' : 'projects'}.`;
   }));
   $('#refresh').addEventListener('click', load);
   $('#scan').addEventListener('click', async event => action(event.currentTarget, 'Scanning…', async () => { const result = await api(repoPath('/scan'), { method: 'POST' }); notice(`Found ${result.alertCount} supported alerts grouped into ${result.issueCount} remediation issues.`); await load(); }));
@@ -161,7 +164,12 @@ function bind() {
   $('#reset-work-items').addEventListener('click', async event => {
     $('#advanced-actions').open = false;
     if (!state.workItems.length) return notice('There are no work items to reset.');
-    if (!confirm(`Reset all ${state.workItems.length} work item${state.workItems.length === 1 ? '' : 's'} for ${settings.repo}? This clears every work-item record and returns its active issues to Triaged.`)) return;
+    if (!await confirmDialog(`Reset all ${state.workItems.length} work item${state.workItems.length === 1 ? '' : 's'} for ${settings.repo}? This clears every work-item record and returns its active issues to Triaged.`, {
+      eyebrow: 'Destructive action',
+      title: 'Reset all work items?',
+      confirmLabel: 'Reset work items',
+      destructive: true
+    })) return;
     await action(event.currentTarget, 'Resetting…', async () => {
       const result = await api(repoPath('/work-items/actions/reset'), { method: 'POST', body: JSON.stringify({ confirm: true }) });
       state.selected.clear();
@@ -173,6 +181,35 @@ function bind() {
   $('#analyze-selected').addEventListener('click', async event => action(event.currentTarget, 'Analyzing…', async () => { const ids = [...state.selected]; if (!ids.length) throw new Error('Select one or more issues.'); const started = await api(repoPath('/analyze-upgrade/bulk'), { method: 'POST', body: body({ useAi: false, issueIds: ids }) }); const result = await waitForAnalysis(started.id); const grouped = await runAutoGroup(); selectWorkItemView(); notice(`Analyzed ${result.completed}; ${result.failed} failed. Created ${grouped.workItems.length} work item${grouped.workItems.length === 1 ? '' : 's'}.`); await load(); }));
   for (const button of document.querySelectorAll('[data-close-auto-group]')) button.addEventListener('click', () => $('#auto-group-dialog').close());
   $('[data-close-log]').addEventListener('click', () => $('#log-dialog').close());
+}
+
+async function chooseSettingsDirectory(purpose, selector, button) {
+  await action(button, 'Opening…', async () => {
+    const result = await api('/api/system/directory-picker', { method: 'POST', body: JSON.stringify({ purpose }) });
+    if (result.cancelled) return;
+    $(selector).value = result.path;
+    state.fixAgentSkills = await api(`/api/remediation/fix-agent-skills?cursorSkillsDirectory=${encodeURIComponent(result.path)}`);
+    populateDefaultCursorSkills(state.appSettings.defaultCursorSkill);
+    const count = state.fixAgentSkills.filter(item => item.provider === 'cursor').length;
+    $('#cursor-skills-result').textContent = `Found ${count} Cursor ${count === 1 ? 'skill' : 'skills'}.`;
+  });
+}
+
+async function addSelectedProject(button) {
+  await action(button, 'Opening…', async () => {
+    const result = await api('/api/system/directory-picker', { method: 'POST', body: JSON.stringify({ purpose: 'project' }) });
+    if (result.cancelled) return;
+    const repository = await api('/api/local-repositories/inspect', { method: 'POST', body: JSON.stringify({ projectPath: result.path }) });
+    if (state.localRepositories.some(candidate => candidate.path === repository.path || candidate.repo === repository.repo)) {
+      $('#settings-result').textContent = `${repository.repo} is already selected.`;
+      return;
+    }
+    state.localRepositories.push(repository);
+    state.localRepositories.sort((left, right) => left.repo.localeCompare(right.repo));
+    populateRepositories();
+    renderDiscoveredRepositories();
+    $('#settings-result').textContent = `${repository.repo} added. Save settings to keep it.`;
+  });
 }
 
 function populateDefaultCursorSkills(selected) {
@@ -218,20 +255,19 @@ function applyLocalSelection(repo, clearMissing = false) {
 }
 
 function repositoryRecords() {
-  const records = new Map();
-  for (const repository of state.localRepositories) records.set(repository.repo, { name: repository.repo, path: repository.path, local: true });
-  for (const repository of state.githubRepositories) if (!records.has(repository.fullName)) records.set(repository.fullName, { name: repository.fullName, local: false });
-  return [...records.values()].sort((left, right) => Number(right.local) - Number(left.local) || left.name.localeCompare(right.name));
+  return state.localRepositories
+    .map(repository => ({ name: repository.repo, path: repository.path, local: true }))
+    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function renderRepositoryPicker() {
   const repo = $('#repo').value || settings.repo;
   const record = repositoryRecords().find(item => item.name === repo);
   $('#repository-value').textContent = repo || 'Choose a repository';
-  $('#repository-detail').textContent = !repo ? 'Search local clones or GitHub' : record?.local ? 'Local clone ready' : 'GitHub repository';
+  $('#repository-detail').textContent = !repo ? 'Only projects added in Settings' : record ? 'Selected local project' : 'Project is no longer selected';
   $('#repository-trigger').classList.toggle('has-selection', Boolean(repo));
-  $('#scan').disabled = !repo;
-  $('#scan').title = repo ? `Scan ${repo}` : 'Choose a repository before scanning';
+  $('#scan').disabled = !record;
+  $('#scan').title = record ? `Scan ${repo}` : 'Choose one of your selected projects before scanning';
 }
 
 function repositoryOption(record) {
@@ -241,8 +277,8 @@ function repositoryOption(record) {
     type: 'button', role: 'option', 'aria-selected': String(selected),
     onclick: () => selectRepository(record.name)
   },
-  h('span', { class: `repository-option-status ${record.local ? 'local' : 'remote'}`, 'aria-hidden': 'true' }, record.local ? '✓' : 'GH'),
-  h('span', { class: 'repository-option-copy' }, h('strong', {}, record.name), h('small', {}, record.local ? record.path : 'On GitHub · no clone found locally')),
+  h('span', { class: 'repository-option-status local', 'aria-hidden': 'true' }, '✓'),
+  h('span', { class: 'repository-option-copy' }, h('strong', {}, record.name), h('small', {}, record.path)),
   selected ? h('span', { class: 'repository-selected-mark', 'aria-label': 'Selected' }, '✓') : null);
 }
 
@@ -258,13 +294,8 @@ function renderRepositoryOptions() {
     nodes.push(h('div', { class: 'repository-option-group' }, h('span', {}, label), h('small', {}, String(items.length))));
     nodes.push(...items.map(repositoryOption));
   };
-  addGroup('Available locally', records.filter(record => record.local));
-  addGroup('GitHub only', records.filter(record => !record.local));
-  const manualName = $('#repository-search').value.trim();
-  if (/^[^/\s]+\/[^/\s]+$/.test(manualName) && !allRecords.some(record => record.name.toLowerCase() === manualName.toLowerCase())) {
-    addGroup('Other', [{ name: manualName, local: false }]);
-  }
-  if (!nodes.length) nodes.push(h('div', { class: 'repository-empty' }, 'No repositories match your search.'));
+  addGroup('Selected projects', records);
+  if (!nodes.length) nodes.push(h('div', { class: 'repository-empty' }, allRecords.length ? 'No selected projects match your search.' : 'Add a project in Settings first.'));
   target.replaceChildren(...nodes);
 }
 
@@ -298,13 +329,29 @@ function selectRepository(repo) {
 function renderDiscoveredRepositories() {
   const target = $('#discovered-repositories');
   if (!state.localRepositories.length) {
-    target.replaceChildren(h('div', { class: 'empty' }, 'No GitHub repositories found under this root.'));
+    target.replaceChildren(h('div', { class: 'empty' }, 'No projects selected. Use “Browse and add project” above.'));
     return;
   }
-  target.replaceChildren(...state.localRepositories.map(repository => h('button', { class: 'discovered-item', type: 'button', onclick: () => {
-    $('#settings-dialog').close();
-    selectRepository(repository.repo);
-  } }, h('strong', {}, repository.repo), h('span', {}, repository.path))));
+  target.replaceChildren(...state.localRepositories.map(repository => h('div', { class: 'discovered-item' },
+    h('div', { class: 'discovered-item-copy' }, h('strong', {}, repository.repo), h('span', {}, repository.path)),
+    h('div', { class: 'discovered-item-actions' },
+      h('button', { type: 'button', onclick: () => { $('#settings-dialog').close(); selectRepository(repository.repo); } }, 'Select'),
+      h('button', { type: 'button', class: 'danger', onclick: () => removeSelectedProject(repository) }, 'Remove')
+    )
+  )));
+}
+
+function removeSelectedProject(repository) {
+  state.localRepositories = state.localRepositories.filter(candidate => candidate.path !== repository.path);
+  if (settings.repo === repository.repo) {
+    settings.repo = '';
+    settings.projectPath = '';
+    $('#repo').value = '';
+    $('#project-path').value = '';
+  }
+  populateRepositories();
+  renderDiscoveredRepositories();
+  $('#settings-result').textContent = `${repository.repo} removed. Save settings to apply.`;
 }
 
 async function action(button, label, fn) { setBusy(button, true, label); try { await fn(); } catch (error) { notice(error.message, true); } finally { setBusy(button, false); } }
