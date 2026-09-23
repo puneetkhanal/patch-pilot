@@ -17,7 +17,3 @@ export function compareVersions(left: string, right: string) {
   if (!b.prerelease) return -1;
   return a.prerelease.localeCompare(b.prerelease);
 }
-
-export function maxVersion(versions: string[]) {
-  return versions.reduce((best, current) => compareVersions(current, best) > 0 ? current : best, versions[0]);
-}

@@ -1,6 +1,6 @@
 import { $, api, buildAnalysisMemberProgress, h, installRepoControls, issueRisk, matchesRisk, setBusy, settings, splitRepo, workflowLogTail } from './common.js';
 
-const state = { issues: [], workItems: [], selected: new Set(), view: 'work-items', filter: '', risk: '', search: '', defaults: {}, appSettings: {}, localRepositories: [], githubRepositories: [], fixAgentSkills: [], groupingPromptTemplate: '', groupingPromptVersion: '', pendingFixIssue: null, autoGroupExpandedSteps: new Set(), workflowAction: null, workflowSnapshots: {} };
+const state = { issues: [], workItems: [], selected: new Set(), view: 'work-items', filter: '', risk: '', search: '', defaults: {}, appSettings: {}, localRepositories: [], githubRepositories: [], fixAgentSkills: [], groupingPromptTemplate: '', groupingPromptVersion: '', autoGroupExpandedSteps: new Set(), workflowAction: null, workflowSnapshots: {} };
 const states = ['NEW','TRIAGED','PLANNED_BATCH','IN_PROGRESS','READY_FOR_REVIEW','MERGED','RESOLVED','BLOCKED','CLOSED'];
 function notice(message, error = false) { const el = $('#notice'); el.textContent = message; el.className = `notice${error ? ' error' : ''}`; setTimeout(() => el.classList.add('hidden'), 7000); }
 function repoPath(suffix = '') { const [owner, repo] = splitRepo(); return `/api/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}${suffix}`; }
@@ -80,8 +80,9 @@ async function init() {
   $('#grouping-prompt').value = settings.groupingPrompt || state.groupingPromptTemplate;
   $('#group-size').value = String(settings.groupSize);
   $('#repositories-root').value = appSettings.repositoriesRoot || '';
+  $('#cursor-skills-directory').value = appSettings.cursorSkillsDirectory || '';
   populateRepositories();
-  populateFixAgents();
+  populateDefaultCursorSkills(appSettings.defaultCursorSkill);
   renderDiscoveredRepositories();
   applyLocalSelection(settings.repo);
   bind();
@@ -93,22 +94,54 @@ function bind() {
   $('#repo').addEventListener('change', async () => {
     settings.repo = $('#repo').value;
     state.selected.clear();
-    applyLocalSelection(settings.repo);
+    applyLocalSelection(settings.repo, true);
+    renderRepositoryPicker();
     if (!settings.repo) return;
     notice(`Scanning ${settings.repo} for supported vulnerability alerts…`);
     try { await api(repoPath('/scan'), { method: 'POST' }); await load(); } catch (error) { notice(error.message, true); await load(); }
   });
+  $('#repository-trigger').addEventListener('click', toggleRepositoryMenu);
+  $('#repository-search').addEventListener('input', renderRepositoryOptions);
+  $('#repository-search').addEventListener('keydown', event => {
+    if (event.key === 'Escape') closeRepositoryMenu();
+    if (event.key === 'ArrowDown') { event.preventDefault(); $('#repository-options button')?.focus(); }
+  });
+  $('#repository-options').addEventListener('keydown', event => {
+    if (!['ArrowDown', 'ArrowUp', 'Escape'].includes(event.key)) return;
+    event.preventDefault();
+    if (event.key === 'Escape') return closeRepositoryMenu();
+    const options = [...$('#repository-options').querySelectorAll('button')];
+    const offset = event.key === 'ArrowDown' ? 1 : -1;
+    const next = options[(options.indexOf(document.activeElement) + offset + options.length) % options.length];
+    next?.focus();
+  });
+  $('#repository-settings-link').addEventListener('click', () => { closeRepositoryMenu(); $('#settings-dialog').showModal(); });
+  document.addEventListener('click', event => {
+    if (!event.target.closest('.repository-field')) closeRepositoryMenu();
+  });
   $('#project-path').addEventListener('change', () => settings.projectPath = $('#project-path').value);
   $('#settings-button').addEventListener('click', () => $('#settings-dialog').showModal());
+  $('#browse-cursor-skills').addEventListener('click', async event => action(event.currentTarget, 'Browsing…', async () => {
+    const directory = $('#cursor-skills-directory').value.trim();
+    if (!directory) throw new Error('Enter the directory containing Cursor skill folders.');
+    state.fixAgentSkills = await api(`/api/remediation/fix-agent-skills?cursorSkillsDirectory=${encodeURIComponent(directory)}`);
+    populateDefaultCursorSkills(state.appSettings.defaultCursorSkill);
+    const count = state.fixAgentSkills.filter(item => item.provider === 'cursor').length;
+    $('#cursor-skills-result').textContent = `Found ${count} Cursor ${count === 1 ? 'skill' : 'skills'}.`;
+  }));
   $('#save-settings').addEventListener('click', async event => action(event.currentTarget, 'Scanning folders…', async () => {
     const repositoriesRoot = $('#repositories-root').value.trim();
     if (!repositoriesRoot) throw new Error('Enter the parent folder containing your GitHub repositories.');
-    const result = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ repositoriesRoot }) });
+    const cursorSkillsDirectory = $('#cursor-skills-directory').value.trim() || null;
+    const defaultCursorSkill = $('#default-cursor-skill').value || null;
+    const result = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ repositoriesRoot, cursorSkillsDirectory, defaultCursorSkill }) });
     state.appSettings = result.settings;
     state.localRepositories = result.repositories;
+    state.fixAgentSkills = await api('/api/remediation/fix-agent-skills');
     populateRepositories();
+    populateDefaultCursorSkills(state.appSettings.defaultCursorSkill);
     renderDiscoveredRepositories();
-    $('#settings-result').textContent = `Found ${result.repositories.length} GitHub ${result.repositories.length === 1 ? 'repository' : 'repositories'}.`;
+    $('#settings-result').textContent = `Saved. Found ${result.repositories.length} GitHub ${result.repositories.length === 1 ? 'repository' : 'repositories'}.`;
   }));
   $('#refresh').addEventListener('click', load);
   $('#scan').addEventListener('click', async event => action(event.currentTarget, 'Scanning…', async () => { const result = await api(repoPath('/scan'), { method: 'POST' }); notice(`Found ${result.alertCount} supported alerts grouped into ${result.issueCount} remediation issues.`); await load(); }));
@@ -117,7 +150,7 @@ function bind() {
   $('#view-filters').addEventListener('click', event => { if (event.target.tagName !== 'BUTTON') return; state.view = event.target.dataset.view || 'issues'; state.filter = event.target.dataset.state || ''; for (const button of $('#view-filters').querySelectorAll('button')) button.classList.toggle('selected', button === event.target); renderIssues(); });
   $('#group-size').addEventListener('change', event => { settings.groupSize = Number(event.target.value); });
   $('#ai-provider')?.addEventListener('change', event => { settings.aiProvider = event.target.value; $('#connection').textContent = `${state.defaults.githubAuth?.configured ? state.defaults.githubAuth.message : 'GitHub login needed'} · ${aiStatusLabel()}`; });
-  $('#grouping-prompt-button').addEventListener('click', () => $('#grouping-prompt-dialog').showModal());
+  $('#grouping-prompt-button').addEventListener('click', () => { $('#advanced-actions').open = false; $('#grouping-prompt-dialog').showModal(); });
   $('[data-close-grouping-prompt]').addEventListener('click', () => $('#grouping-prompt-dialog').close());
   $('#save-grouping-prompt').addEventListener('click', () => { settings.groupingPrompt = $('#grouping-prompt').value; settings.groupingPromptVersion = state.groupingPromptVersion; $('#grouping-prompt-dialog').close(); notice('AI grouping prompt saved in this browser.'); });
   $('#reset-grouping-prompt').addEventListener('click', () => { settings.groupingPrompt = ''; $('#grouping-prompt').value = state.groupingPromptTemplate; });
@@ -126,6 +159,7 @@ function bind() {
   $('#create-batch').addEventListener('click', async event => action(event.currentTarget, 'Creating…', async () => { if (!state.selected.size) throw new Error('Select one or more Dependabot issues.'); await api(repoPath('/work-items'), { method: 'POST', body: JSON.stringify({ issueIds: [...state.selected] }) }); state.selected.clear(); selectWorkItemView(); notice('Work item created.'); await load(); }));
   $('#auto-batch').addEventListener('click', async event => action(event.currentTarget, 'Organizing…', async () => { const result = await runAutoGroup(); selectWorkItemView(); notice(`Created ${result.workItems.length} work item${result.workItems.length === 1 ? '' : 's'} with up to ${settings.groupSize} compatible issues together.`); await load(); }));
   $('#reset-work-items').addEventListener('click', async event => {
+    $('#advanced-actions').open = false;
     if (!state.workItems.length) return notice('There are no work items to reset.');
     if (!confirm(`Reset all ${state.workItems.length} work item${state.workItems.length === 1 ? '' : 's'} for ${settings.repo}? This clears every work-item record and returns its active issues to Triaged.`)) return;
     await action(event.currentTarget, 'Resetting…', async () => {
@@ -139,51 +173,126 @@ function bind() {
   $('#analyze-selected').addEventListener('click', async event => action(event.currentTarget, 'Analyzing…', async () => { const ids = [...state.selected]; if (!ids.length) throw new Error('Select one or more issues.'); const started = await api(repoPath('/analyze-upgrade/bulk'), { method: 'POST', body: body({ useAi: false, issueIds: ids }) }); const result = await waitForAnalysis(started.id); const grouped = await runAutoGroup(); selectWorkItemView(); notice(`Analyzed ${result.completed}; ${result.failed} failed. Created ${grouped.workItems.length} work item${grouped.workItems.length === 1 ? '' : 's'}.`); await load(); }));
   for (const button of document.querySelectorAll('[data-close-auto-group]')) button.addEventListener('click', () => $('#auto-group-dialog').close());
   $('[data-close-log]').addEventListener('click', () => $('#log-dialog').close());
-  $('[data-close-fix-agent]').addEventListener('click', () => $('#fix-agent-dialog').close());
-  $('#start-fix').addEventListener('click', event => action(event.currentTarget, 'Starting…', startSelectedFix));
 }
 
-function populateFixAgents() {
-  const select = $('#fix-agent-select');
-  select.replaceChildren(h('option', { value: '' }, 'Built-in dependency update (no AI agent)'));
-  for (const item of state.fixAgentSkills) {
-    const provider = `${item.provider[0].toUpperCase()}${item.provider.slice(1)}`;
-    const label = `${provider} · ${item.name}${item.configured ? '' : ` — ${item.reason}`}`;
-    select.append(h('option', { value: JSON.stringify({ provider: item.provider, skill: item.skill }), ...(item.configured ? {} : { disabled: '' }) }, label));
+function populateDefaultCursorSkills(selected) {
+  const select = $('#default-cursor-skill');
+  select.replaceChildren(h('option', { value: '' }, 'No default Cursor skill'));
+  for (const item of state.fixAgentSkills.filter(item => item.provider === 'cursor')) {
+    select.append(h('option', { value: item.skill, ...(item.configured ? {} : { disabled: '' }) }, `${item.name}${item.configured ? '' : ` — ${item.reason}`}`));
   }
-  const preferred = state.fixAgentSkills.find(item => item.provider === 'cursor' && item.configured)
-    || state.fixAgentSkills.find(item => item.configured);
-  if (preferred) select.value = JSON.stringify({ provider: preferred.provider, skill: preferred.skill });
+  select.value = selected && [...select.options].some(option => option.value === selected) ? selected : '';
 }
 
 function defaultFixAgent() {
-  const cursor = state.fixAgentSkills.find(item => item.provider === 'cursor' && item.configured);
-  if (cursor) return { provider: cursor.provider, skill: cursor.skill };
+  const configuredDefault = state.appSettings.defaultCursorSkill;
+  const cursor = state.fixAgentSkills.find(item => item.provider === 'cursor' && item.skill === configuredDefault && item.configured);
+  if (configuredDefault) return cursor ? { provider: cursor.provider, skill: cursor.skill } : null;
+  const firstCursor = state.fixAgentSkills.find(item => item.provider === 'cursor' && item.configured);
+  if (firstCursor) return { provider: firstCursor.provider, skill: firstCursor.skill };
   const fallback = state.fixAgentSkills.find(item => item.configured);
   return fallback ? { provider: fallback.provider, skill: fallback.skill } : null;
 }
 function requireFixAgent() {
   const agent = defaultFixAgent();
-  if (!agent) throw new Error('Configure CURSOR_API_KEY and add a Cursor fix skill under .cursor/skills before running a fix.');
+  if (!agent) throw new Error(state.appSettings.defaultCursorSkill
+    ? `The default Cursor skill "${state.appSettings.defaultCursorSkill}" is no longer available. Choose another skill in Settings.`
+    : 'Configure CURSOR_API_KEY and choose a default Cursor remediation skill in Settings before running a fix.');
   return agent;
 }
 
 function populateRepositories() {
-  const options = $('#repo-options');
-  options.replaceChildren();
-  const localNames = new Set();
-  for (const repository of state.localRepositories) {
-    localNames.add(repository.repo);
-    options.append(h('option', { value: repository.repo, label: repository.path }));
-  }
-  for (const repository of state.githubRepositories) if (!localNames.has(repository.fullName)) options.append(h('option', { value: repository.fullName, label: 'GitHub · not found under local root' }));
+  renderRepositoryPicker();
+  renderRepositoryOptions();
 }
 
-function applyLocalSelection(repo) {
+function applyLocalSelection(repo, clearMissing = false) {
   const local = state.localRepositories.find(repository => repository.repo === repo);
-  if (!local) return;
-  settings.projectPath = local.path;
-  $('#project-path').value = local.path;
+  if (local) {
+    settings.projectPath = local.path;
+    $('#project-path').value = local.path;
+  } else if (clearMissing) {
+    settings.projectPath = '';
+    $('#project-path').value = '';
+  }
+}
+
+function repositoryRecords() {
+  const records = new Map();
+  for (const repository of state.localRepositories) records.set(repository.repo, { name: repository.repo, path: repository.path, local: true });
+  for (const repository of state.githubRepositories) if (!records.has(repository.fullName)) records.set(repository.fullName, { name: repository.fullName, local: false });
+  return [...records.values()].sort((left, right) => Number(right.local) - Number(left.local) || left.name.localeCompare(right.name));
+}
+
+function renderRepositoryPicker() {
+  const repo = $('#repo').value || settings.repo;
+  const record = repositoryRecords().find(item => item.name === repo);
+  $('#repository-value').textContent = repo || 'Choose a repository';
+  $('#repository-detail').textContent = !repo ? 'Search local clones or GitHub' : record?.local ? 'Local clone ready' : 'GitHub repository';
+  $('#repository-trigger').classList.toggle('has-selection', Boolean(repo));
+  $('#scan').disabled = !repo;
+  $('#scan').title = repo ? `Scan ${repo}` : 'Choose a repository before scanning';
+}
+
+function repositoryOption(record) {
+  const selected = record.name === ($('#repo').value || settings.repo);
+  return h('button', {
+    class: `repository-option${selected ? ' selected' : ''}`,
+    type: 'button', role: 'option', 'aria-selected': String(selected),
+    onclick: () => selectRepository(record.name)
+  },
+  h('span', { class: `repository-option-status ${record.local ? 'local' : 'remote'}`, 'aria-hidden': 'true' }, record.local ? '✓' : 'GH'),
+  h('span', { class: 'repository-option-copy' }, h('strong', {}, record.name), h('small', {}, record.local ? record.path : 'On GitHub · no clone found locally')),
+  selected ? h('span', { class: 'repository-selected-mark', 'aria-label': 'Selected' }, '✓') : null);
+}
+
+function renderRepositoryOptions() {
+  const target = $('#repository-options');
+  if (!target) return;
+  const query = $('#repository-search').value.trim().toLowerCase();
+  const allRecords = repositoryRecords();
+  const records = allRecords.filter(record => !query || record.name.toLowerCase().includes(query) || record.path?.toLowerCase().includes(query));
+  const nodes = [];
+  const addGroup = (label, items) => {
+    if (!items.length) return;
+    nodes.push(h('div', { class: 'repository-option-group' }, h('span', {}, label), h('small', {}, String(items.length))));
+    nodes.push(...items.map(repositoryOption));
+  };
+  addGroup('Available locally', records.filter(record => record.local));
+  addGroup('GitHub only', records.filter(record => !record.local));
+  const manualName = $('#repository-search').value.trim();
+  if (/^[^/\s]+\/[^/\s]+$/.test(manualName) && !allRecords.some(record => record.name.toLowerCase() === manualName.toLowerCase())) {
+    addGroup('Other', [{ name: manualName, local: false }]);
+  }
+  if (!nodes.length) nodes.push(h('div', { class: 'repository-empty' }, 'No repositories match your search.'));
+  target.replaceChildren(...nodes);
+}
+
+function toggleRepositoryMenu() {
+  if ($('#repository-menu').classList.contains('hidden')) openRepositoryMenu();
+  else closeRepositoryMenu();
+}
+
+function openRepositoryMenu() {
+  $('#repository-menu').classList.remove('hidden');
+  $('#repository-trigger').setAttribute('aria-expanded', 'true');
+  $('#repository-search').value = '';
+  renderRepositoryOptions();
+  requestAnimationFrame(() => $('#repository-search').focus());
+}
+
+function closeRepositoryMenu() {
+  $('#repository-menu').classList.add('hidden');
+  $('#repository-trigger').setAttribute('aria-expanded', 'false');
+}
+
+function selectRepository(repo) {
+  const input = $('#repo');
+  const changed = input.value !== repo;
+  input.value = repo;
+  closeRepositoryMenu();
+  renderRepositoryPicker();
+  if (changed) input.dispatchEvent(new Event('change'));
 }
 
 function renderDiscoveredRepositories() {
@@ -193,11 +302,8 @@ function renderDiscoveredRepositories() {
     return;
   }
   target.replaceChildren(...state.localRepositories.map(repository => h('button', { class: 'discovered-item', type: 'button', onclick: () => {
-    $('#repo').value = repository.repo;
-    settings.repo = repository.repo;
-    applyLocalSelection(repository.repo);
     $('#settings-dialog').close();
-    $('#repo').dispatchEvent(new Event('change'));
+    selectRepository(repository.repo);
   } }, h('strong', {}, repository.repo), h('span', {}, repository.path))));
 }
 
@@ -299,8 +405,15 @@ async function runAutoGroup() {
   return { workItems: job.workItems || [] };
 }
 function selectWorkItemView() { state.view = 'work-items'; state.filter = ''; for (const button of $('#view-filters').querySelectorAll('button')) button.classList.toggle('selected', button.dataset.view === 'work-items'); }
-async function load() { try { const [issues, workItems] = await Promise.all([api(repoPath('/issues')), api(repoPath('/work-items'))]); state.issues = issues; state.workItems = workItems; const currentIds = new Set(issues.map(issue => issue.id)); for (const id of state.selected) if (!currentIds.has(id)) state.selected.delete(id); render(); } catch (error) { notice(error.message, true); renderEmpty('Unable to load this repository. Check the token and repository name.'); } }
-function render() { renderSummary(); renderIssues(); }
+async function load() { try { const [issues, workItems] = await Promise.all([api(repoPath('/issues')), api(repoPath('/work-items'))]); state.issues = issues; state.workItems = workItems; const currentIds = new Set(issues.map(issue => issue.id)); for (const id of state.selected) if (!currentIds.has(id)) state.selected.delete(id); render(); $('#refresh-status').textContent = 'Updated just now'; } catch (error) { notice(error.message, true); renderEmpty('Unable to load this repository. Check the token and repository name.'); } }
+function render() { renderSummary(); renderIssues(); renderBoardActions(); }
+function renderBoardActions() {
+  const activeIssues = state.issues.filter(issue => !['CLOSED','MERGED','RESOLVED'].includes(issue.state));
+  const button = $('#auto-batch');
+  const enabled = Boolean(settings.repo && activeIssues.length && aiConfigured());
+  button.disabled = !enabled;
+  button.title = enabled ? `Organize ${activeIssues.length} active issue${activeIssues.length === 1 ? '' : 's'} into work items` : !settings.repo ? 'Choose and scan a repository first' : !activeIssues.length ? 'Scan the repository to find active issues first' : 'Configure an AI provider before auto-grouping';
+}
 function renderSummary() { const counts = Object.fromEntries(states.map(name => [name, state.issues.filter(issue => issue.state === name).length])); const target = $('#summary'); target.replaceChildren(...[['Dependabot issues',state.issues.filter(issue => !['CLOSED','MERGED','RESOLVED'].includes(issue.state)).length],['New',counts.NEW],['In progress',counts.IN_PROGRESS],['Ready for review',counts.READY_FOR_REVIEW],['Active work items',state.workItems.filter(item=>!['merged','failed'].includes(item.state)).length]].map(([label,value]) => h('div',{class:'metric'},h('strong',{},value),h('span',{},label)))); }
 function renderEmpty(message) { $('#board').replaceChildren(h('div',{class:'empty'},h('strong',{},message))); }
 function visibleIssues() { return state.issues.filter(issue => (!state.filter || issue.state === state.filter) && matchesRisk(issue, state.risk) && (!state.search || `${issue.title} ${issue.packageName} ${issue.manifestPath}`.toLowerCase().includes(state.search))); }
@@ -350,6 +463,13 @@ function workItemFixTargets(members) {
   }
   return [...targets.values()];
 }
+function workItemDisplayTitle(members) {
+  const packages = [...new Set(members.map(issue => issue.packageName).filter(Boolean))];
+  if (!packages.length) return 'Empty work item';
+  if (packages.length === 1) return packages[0];
+  if (packages.length === 2) return packages.join(' + ');
+  return `${packages[0]} + ${packages.length - 1} packages`;
+}
 function workItemMember(issue, draggable = false, covered = []) {
   return h('li',{class:'work-item-member',draggable:draggable?'true':'false',...(draggable?{ondragstart:event=>{event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',issue.id);event.currentTarget.classList.add('dragging')},ondragend:event=>{event.currentTarget.classList.remove('dragging');for(const element of document.querySelectorAll('.drag-over'))element.classList.remove('drag-over')}}:{})},
     h('div',{class:'work-item-member-primary'},
@@ -372,9 +492,9 @@ function renderWorkItems() {
     const members = workItem.issueIds.map(id => issueById.get(id)).filter(Boolean);
     return (!state.risk || members.some(issue => memberRisk(issue) === state.risk)) && (!state.search || members.some(issue => `${issue.title} ${issue.packageName} ${issue.manifestPath}`.toLowerCase().includes(state.search)));
   });
-  const unassignedCard = h('article',{class:'issue-card work-item unassigned-work-item',...dropHandlers(undefined)},h('div',{class:'card-top'},h('div',{class:'card-title'},'Unassigned'),h('span',{class:'badge'},`${unassigned.length} issues`)),h('p',{class:'work-item-help'},'Drop here to remove an issue from a draft work item.'),unassigned.length?h('ul',{class:'group-members'},...unassigned.map(issue=>workItemMember(issue,true))):h('div',{class:'work-item-empty'},'All open issues are assigned.'));
+  const unassignedCard = unassigned.length ? h('article',{class:'issue-card work-item unassigned-work-item',...dropHandlers(undefined)},h('div',{class:'card-top'},h('div',{class:'card-title'},'Unassigned'),h('span',{class:'badge'},`${unassigned.length} issue${unassigned.length===1?'':'s'}`)),h('p',{class:'work-item-help'},'Drag an issue into a compatible draft work item.'),h('ul',{class:'group-members'},...unassigned.map(issue=>workItemMember(issue,true)))) : null;
   if (!workItems.length && !unassigned.length) return renderEmpty(activeWorkItems.length ? 'No work items match these filters.' : 'No open Dependabot issues are available. Scan the repository first.');
-  $('#board').replaceChildren(unassignedCard,...workItems.map(workItem => {
+  $('#board').replaceChildren(...(unassignedCard?[unassignedCard]:[]),...workItems.map(workItem => {
     const members = workItem.issueIds.map(id => issueById.get(id)).filter(Boolean);
     const fixTargets = workItemFixTargets(members);
     const safe = members.filter(issue => memberRisk(issue) === 'safe').length;
@@ -383,8 +503,8 @@ function renderWorkItems() {
     const humanReviewTag = workItemHumanReviewTag(workItem);
     const editable = workItem.state === 'draft';
     return h('article',{class:`issue-card work-item${editable?'':' locked-work-item'}`,...(editable?dropHandlers(workItem.id):{})},
-      h('div',{class:'card-top'},h('div',{class:'card-title'},`Work item ${workItem.id.slice(0,8)}`),h('span',{class:'badge'},workItem.state.replaceAll('_',' '))),
-      h('div',{class:'meta'},h('span',{class:'tag state'},workItem.grouping?.source === 'ai' ? 'AI GROUPED' : workItem.grouping?.source === 'dependency_engine' ? 'ENGINE GROUPED' : 'MANUAL'),workItem.grouping?.safetyRank?h('span',{class:'tag'},`Safety rank #${workItem.grouping.safetyRank}`):null,typeof workItem.grouping?.safetyScore==='number'?h('span',{class:`tag risk-${workItem.grouping.safetyLevel||'risky'}`},`${workItem.grouping.safetyScore}/100 ${String(workItem.grouping.safetyLevel||'').replaceAll('_',' ')}`):null,humanReviewTag,h('span',{class:'tag'},`${fixTargets.length} fix target${fixTargets.length===1?'':'s'}`),members.length>fixTargets.length?h('span',{class:'tag'},`${members.length} tracked alert${members.length===1?'':'s'}`):null,safe?h('span',{class:'tag risk-safe'},`${safe} safe`):null,likely?h('span',{class:'tag risk-likely_safe'},`${likely} likely safe`):null,unanalyzed?h('span',{class:'tag'},`${unanalyzed} not analyzed`):null),
+      h('div',{class:'card-top'},h('div',{class:'work-item-heading'},h('div',{class:'card-title',title:workItemDisplayTitle(members)},workItemDisplayTitle(members)),h('small',{},`Work item ${workItem.id.slice(0,8)}`)),h('span',{class:'badge'},workItem.state.replaceAll('_',' '))),
+      h('div',{class:'meta'},h('span',{class:'tag state'},workItem.grouping?.source === 'ai' ? 'AI grouped' : workItem.grouping?.source === 'dependency_engine' ? 'Engine grouped' : 'Manual'),workItem.grouping?.safetyRank?h('span',{class:'tag'},`Safety rank #${workItem.grouping.safetyRank}`):null,typeof workItem.grouping?.safetyScore==='number'?h('span',{class:`tag risk-${workItem.grouping.safetyLevel||'risky'}`},`${workItem.grouping.safetyScore}/100 ${String(workItem.grouping.safetyLevel||'').replaceAll('_',' ')}`):null,humanReviewTag,h('span',{class:'tag'},`${fixTargets.length} fix target${fixTargets.length===1?'':'s'}`),members.length>fixTargets.length?h('span',{class:'tag'},`${members.length} tracked alert${members.length===1?'':'s'}`):null,safe?h('span',{class:'tag risk-safe'},`${safe} safe`):null,likely?h('span',{class:'tag risk-likely_safe'},`${likely} likely safe`):null,unanalyzed?h('span',{class:'tag'},`${unanalyzed} not analyzed`):null),
       h('ul',{class:'group-members'},...fixTargets.map(target=>workItemMember(target.issue,editable,target.covered))),
       workItem.grouping?.rationale?.length?h('details',{class:'group-rationale'},h('summary',{},'Why this work item was created'),h('ul',{},...workItem.grouping.rationale.map(reason=>h('li',{},reason)))):null,
       h('div',{class:'card-actions'},h('button',{onclick:()=>openWorkItem(workItem)},'Details'))
@@ -504,7 +624,7 @@ function workItemWorkflowActions(workItem, workflow, busy = false) {
   const actions = [];
   if (busy) return actions;
   if (workflow.nextActionKind === 'fix') actions.push(h('button', { class: 'primary', onclick: () => runWorkItem(workItem, 'fix') }, workflow.blockedIssueIds?.length ? 'Fix all anyway' : 'Fix all'));
-  if (workflow.nextActionKind === 'create-pr') actions.push(h('button', { class: 'primary', onclick: () => runWorkItem(workItem, 'create-pr') }, 'Create one pull request'));
+  if (workflow.nextActionKind === 'create-pr') actions.push(h('button', { class: 'primary', onclick: () => runWorkItem(workItem, 'create-pr') }, 'Create pull request'));
   if (workflow.canRefix) actions.push(h('button', { class: 'primary', onclick: () => runWorkItem(workItem, 'fix') }, 'Fix all again'));
   if (workflow.nextActionKind === 'review' && workflow.prUrl) actions.push(h('a', { class: 'workflow-link', href: workflow.prUrl, target: '_blank', rel: 'noreferrer' }, 'Open pull request'));
   return actions;
@@ -660,10 +780,10 @@ function openWorkItem(workItem) {
   const humanReviewIds = workItemHumanReviewIds(workItem);
   const humanReviewMembers = members.filter(issue => humanReviewIds.has(issue.id));
   $('#issue-detail').replaceChildren(h('div',{class:'drawer-content'},
-    h('div',{class:'dialog-head'},h('div',{},h('p',{class:'eyebrow'},'Work item'),h('h2',{},workItem.id.slice(0,8))),h('button',{onclick:()=>dialog.close()},'Close')),
+    h('div',{class:'dialog-head'},h('div',{},h('p',{class:'eyebrow'},`Work item ${workItem.id.slice(0,8)}`),h('h2',{},workItemDisplayTitle(members))),h('button',{onclick:()=>dialog.close()},'Close')),
     h('div',{class:'detail-grid'},h('div',{class:'detail-box'},h('span',{},'Status'),workItem.state.replaceAll('_',' ')),h('div',{class:'detail-box'},h('span',{},'Fix targets'),fixTargets.length),h('div',{class:'detail-box'},h('span',{},'Tracked alerts'),members.length),h('div',{class:'detail-box'},h('span',{},'Created by'),source),workItem.grouping?.safetyRank?h('div',{class:'detail-box'},h('span',{},'Safety rank'),`#${workItem.grouping.safetyRank}`):null,typeof workItem.grouping?.safetyScore==='number'?h('div',{class:'detail-box'},h('span',{},'AI safety'),`${workItem.grouping.safetyScore}/100 · ${String(workItem.grouping.safetyLevel||'').replaceAll('_',' ')}`):null,humanReviewMembers.length||workItem.grouping?.requiresHumanReview?h('div',{class:'detail-box'},h('span',{},'Human review'),`${humanReviewMembers.length || workItem.issueIds.length} member${(humanReviewMembers.length || workItem.issueIds.length)===1?'':'s'}`):null,h('div',{class:'detail-box'},h('span',{},'Branch'),h('code',{class:'mono'},workItem.branch)),h('div',{class:'detail-box'},h('span',{},'Updated'),workflowTime(workItem.updatedAt))),
     h('section',{id:'work-item-workflow',class:'workflow-panel','data-work-item-id':workItem.id},h('div',{class:'workflow-loading'},'Loading complete work-item workflow…')),
-    h('div',{class:'detail-actions'},h('button',{class:'primary',onclick:()=>runWorkItem(workItem,'fix')},workItemBlockedMembers(workItem).length?'Fix all anyway':'Fix all'),h('button',{onclick:()=>runWorkItem(workItem,'create-pr')},'Create one PR'),workItem.remediation.jobId?h('button',{onclick:()=>openJobLog(workItem.remediation.jobId)},'Latest job log'):null),
+    h('div',{class:'detail-actions'},h('button',{class:'primary',onclick:()=>runWorkItem(workItem,'fix')},workItemBlockedMembers(workItem).length?'Fix all anyway':'Fix all'),h('button',{onclick:()=>runWorkItem(workItem,'create-pr')},'Create pull request'),workItem.remediation.jobId?h('button',{onclick:()=>openJobLog(workItem.remediation.jobId)},'Latest job log'):null),
     humanReviewMembers.length||workItem.grouping?.humanReviewReasons?.length?h('section',{class:'analysis human-review-panel'},h('h3',{},'Human review required'),workItem.grouping?.humanReviewReasons?.length?h('ul',{},...workItem.grouping.humanReviewReasons.map(reason=>h('li',{},reason))):null,humanReviewMembers.length?h('div',{class:'work-item-detail-members'},...humanReviewMembers.map(issue=>h('article',{class:'work-item-detail-member'},h('div',{},h('strong',{},issue.packageName),h('span',{},` → ${issue.patchedVersion}`),isFixBlocked(issue)?h('p',{class:'muted-text'},issue.lastUpgradeAnalysis?`Engine risk: ${issue.lastUpgradeAnalysis.riskLevel.replaceAll('_',' ')}`:'Dependency analysis not completed'):null),h('button',{onclick:()=>openIssue(issue)},'Issue details')))):h('p',{class:'muted-text'},'Review flagged members before fixing or merging.')):null,
     h('section',{class:'analysis'},h('h3',{},'Fix targets'),h('p',{class:'muted-text'},'One coordinated fix run bumps each target version below. Overlapping alerts for the same package are covered by the highest target.'),h('div',{class:'work-item-detail-members'},...fixTargets.map(target=>h('article',{class:'work-item-detail-member'},h('div',{},h('strong',{},target.issue.packageName),h('span',{},` → ${target.issue.patchedVersion}`),target.covered.length?h('p',{class:'muted-text'},`Covers ${target.covered.length} overlapping alert${target.covered.length===1?'':'s'} at lower target versions.`):null),h('div',{class:'meta'},humanReviewIds.has(target.issue.id)?h('span',{class:'tag human-review'},'Human review'):null,h('span',{class:`tag ${target.issue.lastUpgradeAnalysis?`risk-${target.issue.lastUpgradeAnalysis.riskLevel}`:''}`},target.issue.lastUpgradeAnalysis?target.issue.lastUpgradeAnalysis.riskLevel.replaceAll('_',' '):'not analyzed'),target.issue.lastUpgradeAnalysis?h('span',{class:'tag'},`${target.issue.lastUpgradeAnalysis.safetyScore}/100`):null,h('span',{class:'tag state'},target.issue.state.replaceAll('_',' '))),h('button',{onclick:()=>openIssue(target.issue)},'Issue details'))))),
     members.length>fixTargets.length?h('details',{class:'group-rationale'},h('summary',{},`All tracked alerts (${members.length})`),h('div',{class:'work-item-detail-members'},...members.map(issue=>h('article',{class:'work-item-detail-member'},h('div',{},h('strong',{},issue.packageName),h('span',{},` → ${issue.patchedVersion}`)),h('button',{onclick:()=>openIssue(issue)},'Issue details'))))):null,
@@ -747,21 +867,6 @@ function openIssue(issue) {
 }
 
 async function analyze(issue) { try { await api(`/api/issues/${encodeURIComponent(issue.id)}/analyze-upgrade/ai`,{method:'POST',body:body({promptTemplate:settings.prompt||undefined})});const grouped=await runAutoGroup();selectWorkItemView();notice(`AI analysis complete for ${issue.packageName}. ${grouped.workItems.length} work item${grouped.workItems.length===1?'':'s'} ready.`);await load();const updated=state.issues.find(item=>item.id===issue.id);if(updated)openIssue(updated);} catch(error){notice(error.message,true);} }
-function openFixChooser(issue) {
-  state.pendingFixIssue = issue;
-  $('#fix-agent-issue').textContent = `${issue.packageName} → ${issue.patchedVersion}`;
-  if ($('#issue-dialog').open) $('#issue-dialog').close();
-  $('#fix-agent-dialog').showModal();
-}
-async function startSelectedFix() {
-  const issue = state.pendingFixIssue;
-  if (!issue) throw new Error('Choose an issue to fix.');
-  const value = $('#fix-agent-select').value;
-  const agent = value ? JSON.parse(value) : undefined;
-  $('#fix-agent-dialog').close();
-  state.pendingFixIssue = null;
-  await startIssueJob(issue, 'fix', agent);
-}
 async function startIssueJob(issue,kind,agent){try{const endpoint=kind==='fix'?'fix':'create-pr';const reuseWorktree=kind==='create-pr'&&Boolean(issue.remediation?.result?.worktreePath);const job=await api(`/api/issues/${encodeURIComponent(issue.id)}/actions/${endpoint}`,{method:'POST',body:body({reuseWorktree,...(agent?{agent}:{})})});if($('#issue-dialog').open)$('#issue-dialog').close();await pollJob(job.id);}catch(error){notice(error.message,true);}}
 async function runJob(issue,kind){if(kind==='fix')return startIssueJob(issue,'fix',requireFixAgent());return startIssueJob(issue,kind);}
 async function runWorkItem(workItem, kind) {

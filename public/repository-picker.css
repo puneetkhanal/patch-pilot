@@ -1,0 +1,46 @@
+.repository-field {
+  position: relative;
+  display: grid;
+  gap: 7px;
+  width: min(390px, 32vw);
+  flex: 0 0 min(390px, 32vw);
+}
+
+.field-label { color: var(--muted); font-size: 12px; font-weight: 700; }
+.repository-trigger { width: 100%; height: 54px; padding: 7px 10px; display: flex; align-items: center; gap: 10px; text-align: left; background: #fbfcfa; }
+.repository-trigger:hover { transform: none; }
+.repository-trigger[aria-expanded="true"] { border-color: #65a384; box-shadow: 0 0 0 3px #dff3e8; }
+.repository-mark { display: grid; place-items: center; flex: 0 0 30px; height: 30px; border-radius: 8px; background: #e8ece7; color: #46534b; font-size: 10px; font-weight: 850; }
+.repository-trigger.has-selection .repository-mark { background: var(--ink); color: white; }
+.repository-trigger-copy { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.repository-trigger-copy strong, .repository-trigger-copy small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.repository-trigger-copy strong { font-size: 13px; }
+.repository-trigger-copy small { font-size: 11px; color: var(--muted); font-weight: 550; }
+.repository-chevron { font-size: 17px; color: var(--muted); transition: transform .15s; }
+.repository-trigger[aria-expanded="true"] .repository-chevron { transform: rotate(180deg); }
+.repository-menu { position: absolute; z-index: 20; top: calc(100% + 8px); left: 0; width: min(520px, calc(100vw - 48px)); padding: 10px; background: white; border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 22px 60px rgba(25, 38, 30, .18); }
+.repository-search-wrap { display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: #fbfcfa; }
+.repository-search-wrap:focus-within { border-color: #65a384; box-shadow: 0 0 0 3px #dff3e8; }
+.repository-search-wrap span { font-size: 18px; color: var(--muted); }
+.repository-search-wrap input { width: 100%; min-width: 0; border: 0; padding: 10px 0; box-shadow: none; background: transparent; }
+.repository-options { max-height: 320px; overflow: auto; padding: 7px 0; }
+.repository-option-group { display: flex; justify-content: space-between; padding: 8px 8px 5px; color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+.repository-option-group small { font-size: 10px; }
+.repository-option { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 8px; border: 0; text-align: left; }
+.repository-option:hover, .repository-option:focus-visible { transform: none; background: #f2f5f1; }
+.repository-option.selected { background: #edf7f1; }
+.repository-option-status { display: grid; place-items: center; flex: 0 0 28px; height: 28px; border-radius: 8px; font-size: 10px; }
+.repository-option-status.local { background: var(--green2); color: var(--green); }
+.repository-option-status.remote { background: #edf0eb; color: var(--muted); }
+.repository-option-copy { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.repository-option-copy strong, .repository-option-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repository-option-copy strong { font-size: 12px; }
+.repository-option-copy small { color: var(--muted); font-size: 10px; font-weight: 500; }
+.repository-selected-mark { color: var(--green); }
+.repository-empty { padding: 28px 12px; text-align: center; color: var(--muted); font-size: 12px; }
+.repository-settings-link { width: 100%; padding: 9px; border: 0; border-top: 1px solid var(--line); border-radius: 0; color: var(--green); font-size: 11px; }
+.repository-settings-link:hover { transform: none; background: #f7faf7; }
+@media (max-width: 900px) {
+  .repository-field { width: 100%; flex-basis: auto; }
+  .repository-menu { width: 100%; }
+}

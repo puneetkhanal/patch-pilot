@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { createApp } from './app.js';
 import { loadConfig } from './config/env.js';
 import { GitHubClient } from './integrations/github.js';
-import { SlackMcpClient } from './integrations/slackMcp.js';
+import { CursorSlackNotifier } from './integrations/cursorSlackNotifier.js';
 import { JobManager } from './remediation/jobManager.js';
 import { JsonRepository } from './repository/jsonRepository.js';
 import { AnalysisJobManager } from './services/analysisJobs.js';
@@ -32,7 +32,7 @@ const app = createApp({
   batches,
   jobs: new JobManager(repository),
   worktrees: new WorktreeService(),
-  slack: new SlackMcpClient(config),
+  slack: new CursorSlackNotifier(config, projectRoot),
   analysisJobs: new AnalysisJobManager(repository, config),
   groupingJobs: new GroupingJobManager(repository, batches, config),
   settings,

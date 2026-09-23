@@ -10,6 +10,59 @@ The main board organizes Dependabot issues into work items. A work item can cont
 
 See [SPECIFICATION.md](SPECIFICATION.md) for the product architecture and the current npm adapter contract.
 
+## Workflow at a glance
+
+```mermaid
+flowchart TD
+    Discover["Discover vulnerable dependencies"]
+    Analyze["Analyze risk and compatibility"]
+    Group["Group related fixes"]
+    Remediate["Apply and verify changes"]
+    Deliver["Review and merge pull requests"]
+
+    Discover --> Analyze --> Group --> Remediate --> Deliver
+```
+
+## Core workflow architecture
+
+```mermaid
+flowchart LR
+    User["Operator"] --> UI["Local web dashboard"]
+    UI --> API["Express API"]
+
+    GitHub["GitHub Dependabot alerts"] --> Scanner["Scanner"]
+    API --> Scanner
+    Scanner --> Store["Issue and work-item repository"]
+    Store --> UI
+
+    API --> Analysis["Dependency analysis"]
+    LocalRepo["Local repository clone"] --> Analysis
+    Analysis --> Store
+
+    API --> Grouping["AI grouping job"]
+    Store --> Grouping
+    LocalRepo --> Context["Manifest, lockfile, import, and graph context"]
+    Context --> Grouping
+    Models["Cursor or Gemini"] <--> Grouping
+    Grouping --> WorkItems["Validated work items"]
+    WorkItems --> Store
+
+    API --> Jobs["Remediation job manager"]
+    WorkItems --> Jobs
+    Jobs --> Worktree["Isolated Git worktree"]
+    Worktree --> Bump["Deterministic dependency update"]
+    Bump -. optional .-> Agent["Registered Codex, Claude, or Cursor skill"]
+    Bump --> Verify["Validation and commit"]
+    Agent --> Verify
+    Verify --> PullRequest["GitHub pull request"]
+    PullRequest --> UI
+
+    API -. review request .-> CursorCloud["Cursor cloud agent"]
+    CursorCloud -. Slack MCP .-> Slack["Slack reviewers"]
+```
+
+The dashboard is the control plane, while source changes happen only inside isolated worktrees. Deterministic analysis and server-side validation remain authoritative around optional AI grouping, fix assistance, and review notification steps.
+
 ## Ecosystem support
 
 | Ecosystem | Alert source | Status |
@@ -125,6 +178,8 @@ Skills are discovered by provider from:
 .cursor/skills/<skill>/SKILL.md   # Cursor
 ```
 
+The Settings dialog can point Cursor at any directory whose immediate child folders contain `SKILL.md` files. After browsing that directory, choose a default Cursor remediation skill and save. Issue and work-item AI fixes then use that saved skill automatically; an explicit API `agent` selection still overrides the default for an individual run.
+
 PatchPilot includes `.agents/skills/dependency-security-fix/SKILL.md` for Codex testing. Codex is enabled by default and uses the local Codex login or `CODEX_API_KEY`; the runner uses `workspace-write`, disables approval prompts, and disables tool network access. Claude remains disabled until explicitly enabled, and Cursor requires `CURSOR_API_KEY`.
 
 ```text
@@ -138,17 +193,28 @@ FIX_AGENT_SKILLS_ROOT=/optional/project/root
 
 The server only accepts provider/skill pairs found in its registry. Disabled providers are visible but cannot be selected, and arbitrary skill paths are rejected.
 
-## Slack MCP
+## Slack through Cursor MCP
 
-To enable review requests:
+Review requests run the `.cursor/skills/send-slack-review/SKILL.md` skill through a **Cursor cloud agent**. Cursor owns the Slack MCP OAuth session on its backend; PatchPilot does not store a Slack bot token or OAuth refresh token.
+
+One-time setup:
+
+1. Open [cursor.com/agents](https://cursor.com/agents), open the **MCP** dropdown, add or enable `https://mcp.slack.com/mcp`, and complete its OAuth flow. This is separate from installing Cursor's regular Slack integration.
+2. Configure the server identifier, tool name, and default Slack channel ID:
 
 ```text
-SLACK_MCP_URL=https://example.com/mcp
-SLACK_MCP_TOOL=send_message
-SLACK_DEFAULT_CHANNEL=#security-reviews
+SLACK_CURSOR_MCP_SERVER=slack
+SLACK_CURSOR_MCP_TOOL=slack_send_message
+SLACK_DEFAULT_CHANNEL=C0123456789
+SLACK_CURSOR_SKILL=.cursor/skills/send-slack-review/SKILL.md
+SLACK_CURSOR_TIMEOUT_MS=180000
 ```
 
-The client uses MCP initialize and `tools/call` over Streamable HTTP. The selected PR titles, URLs, check state, and review state are formatted into the tool's `text` argument.
+By default, PatchPilot uses the dashboard-managed Slack MCP server authorized at `cursor.com/agents`; it does not replace that server with an inline definition. Use a personal API key belonging to the same Cursor user who authorized Slack MCP because service-account keys cannot reuse a user's OAuth connection.
+
+`SLACK_CURSOR_MCP_URL` and `SLACK_CURSOR_MCP_CLIENT_ID` optionally replace the dashboard server with an inline endpoint and OAuth client. Set `SLACK_CURSOR_AGENT_ID` to a `bc-...` agent ID when Slack was enabled on a specific existing cloud agent; PatchPilot resumes it without overriding its persisted MCP tools. `SLACK_CURSOR_CLOUD_REPO` is optional when creating new agents.
+
+PatchPilot instructs the cloud agent to use only the configured MCP server/tool, requires exactly one successful matching call, and sets `skipReviewerRequest` to avoid reviewer notifications for automated sends. The SDK's local-agent `tools` allowlist is intentionally omitted because Cursor cloud agents do not support that option. If the OAuth session expires, reconnect Slack MCP at [cursor.com/agents](https://cursor.com/agents) before retrying. `POST /api/slack/probe` sends a real, visible test message.
 
 ## Commands
 
@@ -156,10 +222,50 @@ The client uses MCP initialize and `tools/call` over Streamable HTTP. The select
 npm test
 npm run test:unit
 npm run test:integration
+npm run test:e2e:github
+npm run test:e2e:slack
 npm run build
 npm start
 npm run audit:identifiers
 ```
+
+## Real GitHub remediation testbed
+
+The real-GitHub end-to-end test is deliberately excluded from ordinary test runs. It clones a dedicated test repository, scans its real open npm Dependabot alerts, uses Gemini to analyze and auto-group them into work items, selects the work item containing the configured alert, applies that work item through the Cursor `dependency-security-fix` skill in an isolated worktree, pushes the generated branch, and opens and verifies one pull request. It then closes the pull request and deletes the generated branch. It never changes the testbed's default branch.
+
+Use a disposable repository whose default branch contains a committed `package.json` and lockfile with a known vulnerable npm dependency. Enable Dependabot alerts and wait for GitHub to create an open alert. The authenticated `gh` account needs read access to Dependabot alerts and write access to repository contents and pull requests. Configure `GEMINI_API_KEY` and `CURSOR_API_KEY` in `.env` or the invoking shell; the test loads `.env` only during an explicit live run.
+
+The test refuses to run unless cleanup is explicitly enabled, and it refuses to touch an existing remediation branch or pull request. Choose an alert that is the first alert number on its PatchPilot issue when multiple manifests are grouped together.
+
+```bash
+gh auth status
+E2E_GITHUB_REPO=owner/disposable-vulnerability-testbed \
+E2E_GITHUB_ALERT=123 \
+E2E_GITHUB_CLEANUP=1 \
+npm run test:e2e:github
+```
+
+Set `E2E_GITHUB_PACKAGE` as an additional assertion when the testbed should remediate a specific package. A failed run may leave a generated `security-fix/dependabot/...` branch if GitHub becomes unavailable during cleanup; inspect and remove only that test-owned branch before retrying.
+
+## Real Slack MCP test
+
+The Slack E2E is excluded from ordinary test runs. It directly invokes the Cursor SDK cloud agent and authenticated Slack MCP server, without starting PatchPilot's server or using its UI. It sends one visible message containing a unique E2E marker. Use a dedicated test channel; the test does not delete its message because the configured MCP server may expose only the send tool.
+
+Authorize Slack at `cursor.com/agents`, put the Cursor and Slack configuration in `.env`, and run:
+
+```bash
+E2E_SLACK_CHANNEL=C0123456789 \
+E2E_SLACK_SEND=1 \
+npm run test:e2e:slack
+```
+
+The explicit `E2E_SLACK_SEND=1` acknowledgement prevents accidental external messages. Success verifies the isolated `Vitest → Cursor SDK cloud agent → Slack MCP → Slack channel` path. Check the dedicated channel to confirm the message visually.
+
+Set `E2E_CURSOR_RUNTIME=local` to test a local Cursor SDK agent instead. Local mode loads project, user, and plugin MCP settings from Cursor Desktop and remains independent of PatchPilot's API and UI.
+
+Set `E2E_CURSOR_AGENT_ID=bc-...` to resume and test a specific existing Slack-enabled cloud agent instead of creating a new one.
+
+Set `E2E_CURSOR_MCP_SOURCE=dashboard` to omit inline MCP configuration and verify that a new cloud agent inherits the user's or team's server from `cursor.com/agents`.
 
 `npm run build` emits `dist/server.js`; `npm start` serves the compiled API and the static web UI.
 

@@ -25,7 +25,7 @@
   font-size: 14px;
 }
 
-.settings-dialog label input { width: 100%; }
+.settings-dialog label input, .settings-dialog label select { width: 100%; }
 .muted-text { align-self: center; color: var(--muted); font-size: 12px; }
 .discovered-list { display: grid; gap: 7px; max-height: 300px; overflow: auto; }
 .discovered-item { padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: #f8faf7; }

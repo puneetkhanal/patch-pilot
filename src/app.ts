@@ -9,7 +9,7 @@ export function createApp(dependencies: ApiDependencies, staticRoot = path.resol
   app.use(express.static(staticRoot));
   app.use((error: any, _req: any, res: any, _next: any) => {
     console.error(error);
-    const status = error?.status || (error?.name === 'ZodError' ? 400 : 500);
+    const status = error?.status || (error?.name === 'ZodError' || Array.isArray(error?.issues) ? 400 : 500);
     res.status(status).json({ error: error?.message || 'Internal error' });
   });
   return app;

@@ -431,7 +431,7 @@ Parse results from either a JSON result blob or documented `key: value` output l
 
 - `GET /api/slack/status`
 - `POST /api/slack/probe`
-- `POST /api/issues/:id/slack-review-request`
+- `POST /api/repos/:owner/:repo/slack-review-request`
 
 ### 6.9 State operations
 

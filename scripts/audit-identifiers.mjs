@@ -12,8 +12,10 @@ const allowedUrlHosts = [
   'api.github.com',
   'github.com',
   'api.openai.com',
+  'cursor.com',
   'example.com',
-  'generativelanguage.googleapis.com'
+  'generativelanguage.googleapis.com',
+  'mcp.slack.com'
 ];
 const urlPattern = new RegExp(`https?:\\/\\/(?!${allowedUrlHosts.map(host => host.replaceAll('.', '\\.')).join('|')})(?:[^\\s"')]+)`, 'i');
 const builtInPatterns = [

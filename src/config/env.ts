@@ -25,8 +25,14 @@ export interface Config {
   claudeFixEnabled: boolean;
   claudeFixCommand: string;
   fixAgentSkillsRoot?: string;
-  slackMcpUrl?: string;
-  slackMcpTool: string;
+  slackCursorMcpUrl?: string;
+  slackCursorMcpClientId?: string;
+  slackCursorAgentId?: string;
+  slackCursorCloudRepo?: string;
+  slackCursorMcpServer?: string;
+  slackCursorMcpTool?: string;
+  slackCursorSkill: string;
+  slackCursorTimeoutMs: number;
   slackDefaultChannel?: string;
 }
 
@@ -61,8 +67,14 @@ export function loadConfig(env = process.env): Config {
     claudeFixEnabled: /^(1|true|yes)$/i.test(env.CLAUDE_FIX_ENABLED || ''),
     claudeFixCommand: env.CLAUDE_FIX_COMMAND || 'claude',
     fixAgentSkillsRoot: env.FIX_AGENT_SKILLS_ROOT,
-    slackMcpUrl: env.SLACK_MCP_URL,
-    slackMcpTool: env.SLACK_MCP_TOOL || 'send_message',
+    slackCursorMcpUrl: env.SLACK_CURSOR_MCP_URL,
+    slackCursorMcpClientId: env.SLACK_CURSOR_MCP_CLIENT_ID,
+    slackCursorAgentId: env.SLACK_CURSOR_AGENT_ID,
+    slackCursorCloudRepo: env.SLACK_CURSOR_CLOUD_REPO,
+    slackCursorMcpServer: env.SLACK_CURSOR_MCP_SERVER,
+    slackCursorMcpTool: env.SLACK_CURSOR_MCP_TOOL,
+    slackCursorSkill: env.SLACK_CURSOR_SKILL || '.cursor/skills/send-slack-review/SKILL.md',
+    slackCursorTimeoutMs: Number(env.SLACK_CURSOR_TIMEOUT_MS || 180_000),
     slackDefaultChannel: env.SLACK_DEFAULT_CHANNEL
   };
 }

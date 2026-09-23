@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { Config } from '../config/env.js';
 import { issueStates, FixJob, TrackerIssue } from '../domain/types.js';
 import { GitHubClient } from '../integrations/github.js';
-import { SlackMcpClient } from '../integrations/slackMcp.js';
+import { ReviewNotifier } from '../integrations/cursorSlackNotifier.js';
 import { awsStatus } from '../remediation/aws.js';
 import { JobManager } from '../remediation/jobManager.js';
 import { Repository } from '../repository/repository.js';
@@ -22,6 +22,7 @@ import { FixAgentSkillService } from '../services/fixAgentSkills.js';
 import { buildIssueWorkflow } from '../services/issueWorkflow.js';
 import { buildWorkItemWorkflow } from '../services/workItemWorkflow.js';
 import { collectPrimaryBatchAlerts } from '../services/packageTargetDedup.js';
+import { buildSlackReviewMessage } from '../services/slackReview.js';
 import { defaultWorkItemGroupingPrompt } from '../services/workItemGrouping.js';
 import { aiProviderSchema, assertProviderConfigured, configuredAiProviders, resolveProvider } from '../services/aiProvider.js';
 
@@ -33,7 +34,7 @@ export type ApiDependencies = {
   batches: BatchService;
   jobs: JobManager;
   worktrees: WorktreeService;
-  slack: SlackMcpClient;
+  slack: ReviewNotifier;
   analysisJobs: AnalysisJobManager;
   groupingJobs: GroupingJobManager;
   settings: SettingsService;
@@ -57,6 +58,34 @@ export function apiRouter(d: ApiDependencies) {
     if (!issue) throw Object.assign(new Error('Issue not found'), { status: 404 });
     return issue;
   };
+  const resolveFixAgent = async (requested?: { provider: 'codex' | 'claude' | 'cursor'; skill: string }) => {
+    const settings = await d.settings.get();
+    const selection = requested || (settings.defaultCursorSkill ? { provider: 'cursor' as const, skill: settings.defaultCursorSkill } : undefined);
+    if (!selection) return {};
+    const resolved = await d.fixAgentSkills.resolve(selection, settings.cursorSkillsDirectory);
+    return { selection, resolved };
+  };
+  const slackReviewSchema = z.object({
+    channel: z.string().trim().min(1).max(100).optional(),
+    message: z.string().trim().min(1).max(1000).optional(),
+    prNumbers: z.array(z.number().int().positive()).max(25)
+  });
+  const prepareSlackReview = async (req: any) => {
+    const body = slackReviewSchema.parse(req.body || {});
+    if (!body.prNumbers.length) throw Object.assign(new Error('Select at least one pull request'), { status: 400 });
+    const repo = `${req.params.owner}/${req.params.repo}`;
+    const requested = new Set(body.prNumbers);
+    const prs = (await d.github.pullRequestStatuses(req.params.owner, req.params.repo)).filter(pr => requested.has(pr.number));
+    const found = new Set(prs.map(pr => pr.number));
+    const missing = [...requested].filter(number => !found.has(number));
+    if (missing.length) throw Object.assign(new Error(`Open pull request(s) not found: ${missing.join(', ')}`), { status: 404 });
+    const [issues, workItems] = await Promise.all([d.repo.listIssues(repo), d.repo.listBatches(repo)]);
+    return {
+      channel: body.channel,
+      text: buildSlackReviewMessage(repo, prs, issues, workItems, body.message),
+      pullRequests: prs.map(pr => ({ title: pr.title, url: pr.url, status: `${pr.checks.conclusion}; ${pr.reviewState}` }))
+    };
+  };
 
   router.get('/health', (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
   router.get('/config/defaults', (_req, res) => res.json({
@@ -72,16 +101,23 @@ export function apiRouter(d: ApiDependencies) {
     geminiConfigured: Boolean(d.config.geminiApiKey),
     geminiModel: d.config.geminiModel,
     aiProviders: configuredAiProviders(d.config),
-    slackConfigured: Boolean(d.config.slackMcpUrl),
+    slackConfigured: d.slack.status().configured,
     ecosystems: ecosystemAdapters,
     githubAuth: d.github.authStatus()
   }));
   router.get('/github/repos', asyncRoute(async (_req: any, res: any) => res.json(await d.github.repositories())));
   router.get('/settings', asyncRoute(async (_req: any, res: any) => res.json(await d.settings.get())));
   router.put('/settings', asyncRoute(async (req: any, res: any) => {
-    const body = z.object({ repositoriesRoot: z.string().min(1) }).parse(req.body);
+    const body = z.object({
+      repositoriesRoot: z.string().min(1),
+      cursorSkillsDirectory: z.string().min(1).optional().nullable(),
+      defaultCursorSkill: z.string().min(1).optional().nullable()
+    }).parse(req.body);
+    const cursorSkillsDirectory = body.cursorSkillsDirectory || undefined;
+    const defaultCursorSkill = body.defaultCursorSkill || undefined;
+    if (defaultCursorSkill) await d.fixAgentSkills.resolve({ provider: 'cursor', skill: defaultCursorSkill }, cursorSkillsDirectory);
     const repositories = await d.localRepositories.discover(body.repositoriesRoot);
-    const settings = await d.settings.update({ repositoriesRoot: body.repositoriesRoot });
+    const settings = await d.settings.update({ repositoriesRoot: body.repositoriesRoot, cursorSkillsDirectory, defaultCursorSkill });
     res.json({ settings, repositories });
   }));
   router.get('/local-repositories', asyncRoute(async (_req: any, res: any) => {
@@ -131,7 +167,7 @@ export function apiRouter(d: ApiDependencies) {
     if (kind !== 'fix' && body.agent) return res.status(400).json({ error: 'An agent skill can only be selected when running a fix' });
     const issue = await d.repo.getIssue(req.params.id, body.repo);
     if (!issue) return res.status(404).json({ error: 'Issue not found' });
-    const agentSkill = body.agent ? await d.fixAgentSkills.resolve(body.agent) : undefined;
+    const { selection: agent, resolved: agentSkill } = kind === 'fix' ? await resolveFixAgent(body.agent) : {};
     const aws = awsStatus(d.config.requireAwsSso, d.config.awsProfile);
     if (!aws.valid) return res.status(412).json(aws);
     const root = body.projectPath || d.config.repoRoot || d.config.defaultProjectPath || '';
@@ -143,7 +179,7 @@ export function apiRouter(d: ApiDependencies) {
     const publishFlags = kind === 'fix' && issue.pr.url ? ['--push'] : [];
     const args = ['fix', issue.repo, String(issue.alerts[0]), ...(root ? ['--repo-root', root] : []), ...dynamicFlags, ...publishFlags, ...fixedFlags];
     const job = d.jobs.start({
-      kind, repo: issue.repo, issueId: issue.id, alertNumber: issue.alerts[0], agent: body.agent,
+      kind, repo: issue.repo, issueId: issue.id, alertNumber: issue.alerts[0], agent,
       command: path.resolve('scripts/remediation/dependabot-issue-fix.sh'), args,
       env: {
         REMEDIATION_PRE_INSTALL_SCRIPT: d.config.preInstallScript,
@@ -151,8 +187,8 @@ export function apiRouter(d: ApiDependencies) {
         DEPENDABOT_FIX_CACHE_ROOT: d.config.fixCacheRoot,
         DEPENDABOT_FIX_REPO_ROOT: root,
         GITHUB_REPOSITORY: issue.repo,
-        REMEDIATION_AGENT_PROVIDER: body.agent?.provider,
-        REMEDIATION_AGENT_SKILL: body.agent?.skill,
+        REMEDIATION_AGENT_PROVIDER: agent?.provider,
+        REMEDIATION_AGENT_SKILL: agent?.skill,
         REMEDIATION_AGENT_SKILL_FILE: agentSkill?.file,
         CODEX_FIX_MODEL: d.config.codexFixModel,
         CLAUDE_FIX_COMMAND: d.config.claudeFixCommand,
@@ -169,7 +205,7 @@ export function apiRouter(d: ApiDependencies) {
       },
       onComplete: completed => finishIssueJob(issue, completed)
     });
-    issue.remediation = { jobId: job.id, agent: body.agent };
+    issue.remediation = { jobId: job.id, agent };
     await d.repo.saveIssue(issue);
     await d.repo.transitionIssue(issue.id, 'IN_PROGRESS', 'job', kind, true, issue.repo);
     res.status(202).json(job);
@@ -182,7 +218,11 @@ export function apiRouter(d: ApiDependencies) {
   router.get('/fix-jobs/:jobId', asyncRoute(async (req: any, res: any) => { const job = await d.jobs.get(req.params.jobId); return job ? res.json(job) : res.status(404).json({ error: 'Job not found' }); }));
   router.get('/repos/:owner/:repo/fix-jobs', asyncRoute(async (req: any, res: any) => res.json(await d.jobs.list(`${req.params.owner}/${req.params.repo}`))));
   router.get('/remediation/aws-status', (_req, res) => res.json(awsStatus(d.config.requireAwsSso, d.config.awsProfile)));
-  router.get('/remediation/fix-agent-skills', asyncRoute(async (_req: any, res: any) => res.json(await d.fixAgentSkills.list())));
+  router.get('/remediation/fix-agent-skills', asyncRoute(async (req: any, res: any) => {
+    const settings = await d.settings.get();
+    const directory = typeof req.query.cursorSkillsDirectory === 'string' ? req.query.cursorSkillsDirectory : settings.cursorSkillsDirectory;
+    res.json(await d.fixAgentSkills.list(directory));
+  }));
   router.post('/remediation/aws-sso-login', (_req, res) => res.status(501).json({ error: 'Run `aws sso login --profile <profile>` in a terminal; background HTTP workers cannot safely complete an interactive login.' }));
 
   router.post('/repos/:owner/:repo/batches', asyncRoute(async (req: any, res: any) => {
@@ -269,7 +309,7 @@ export function apiRouter(d: ApiDependencies) {
       const blocked = (issues as TrackerIssue[]).find(issue => !issue.lastUpgradeAnalysis || ['risky', 'unsafe'].includes(issue.lastUpgradeAnalysis.riskLevel) || issue.lastUpgradeAnalysis.needsAdditionalBumps);
       if (blocked) return res.status(409).json({ error: `Analyze and resolve dependency risk before fixing work item member: ${blocked.packageName}` });
     }
-    const agentSkill = body.agent ? await d.fixAgentSkills.resolve(body.agent) : undefined;
+    const { selection: agent, resolved: agentSkill } = kind === 'batch-fix' ? await resolveFixAgent(body.agent) : {};
     const root = body.projectPath || d.config.repoRoot || d.config.defaultProjectPath || '';
     const alerts = collectPrimaryBatchAlerts(issues as TrackerIssue[]);
     const publishFlags = kind === 'batch-fix' && prExists ? ['--push'] : [];
@@ -277,7 +317,7 @@ export function apiRouter(d: ApiDependencies) {
       (issues as TrackerIssue[]).flatMap(issue => issue.lastUpgradeAnalysis ? [[String(issue.alerts[0]), issue.lastUpgradeAnalysis]] : [])
     );
     const job = d.jobs.start({
-      kind, repo: batch.repo, batchId: batch.id, agent: body.agent,
+      kind, repo: batch.repo, batchId: batch.id, agent,
       command: path.resolve('scripts/remediation/dependabot-batch-fix.sh'),
       args: ['fix', batch.repo, '--alerts', alerts, '--batch-id', batch.id, ...(root ? ['--repo-root', root] : []), ...publishFlags, ...flags],
       env: {
@@ -286,8 +326,8 @@ export function apiRouter(d: ApiDependencies) {
         DEPENDABOT_FIX_CACHE_ROOT: d.config.fixCacheRoot,
         DEPENDABOT_FIX_REPO_ROOT: root,
         GITHUB_REPOSITORY: batch.repo,
-        REMEDIATION_AGENT_PROVIDER: body.agent?.provider,
-        REMEDIATION_AGENT_SKILL: body.agent?.skill,
+        REMEDIATION_AGENT_PROVIDER: agent?.provider,
+        REMEDIATION_AGENT_SKILL: agent?.skill,
         REMEDIATION_AGENT_SKILL_FILE: agentSkill?.file,
         CODEX_FIX_MODEL: d.config.codexFixModel,
         CLAUDE_FIX_COMMAND: d.config.claudeFixCommand,
@@ -309,7 +349,7 @@ export function apiRouter(d: ApiDependencies) {
         }
       }
     });
-    batch.state = 'fixing'; batch.remediation = { jobId: job.id, agent: body.agent }; batch.updatedAt = new Date().toISOString(); await d.repo.saveBatch(batch);
+    batch.state = 'fixing'; batch.remediation = { jobId: job.id, agent }; batch.updatedAt = new Date().toISOString(); await d.repo.saveBatch(batch);
     for (const issue of issues as TrackerIssue[]) await d.repo.transitionIssue(issue.id, 'IN_PROGRESS', 'batch-job', batch.id, true, issue.repo);
     res.status(202).json(job);
   });
@@ -470,12 +510,35 @@ export function apiRouter(d: ApiDependencies) {
   router.post('/repos/:owner/:repo/worktrees/bulk-delete', asyncRoute(async (req: any, res: any) => { const body = z.object({ projectPath: z.string().optional(), ids: z.array(z.string()), force: z.boolean().optional() }).parse(req.body); const localPath = body.projectPath || d.config.defaultProjectPath || d.config.repoRoot; if (!localPath) return res.status(400).json({ error: 'projectPath required' }); const removed = []; for (const id of body.ids) removed.push(await d.worktrees.remove(localPath, id, body.force)); res.json(removed); }));
 
   router.get('/slack/status', (_req, res) => res.json(d.slack.status()));
-  router.post('/slack/probe', asyncRoute(async (req: any, res: any) => { const body = z.object({ channel: z.string().optional() }).parse(req.body || {}); res.json(await d.slack.sendReviewRequest({ channel: body.channel, text: 'PatchPilot Slack MCP connection test', pullRequests: [] })); }));
+  router.post('/slack/probe', asyncRoute(async (req: any, res: any) => { const body = z.object({ channel: z.string().trim().min(1).max(100).optional() }).parse(req.body || {}); res.json(await d.slack.sendReviewRequest({ channel: body.channel, text: 'PatchPilot Slack MCP connection test', pullRequests: [] })); }));
   router.post('/repos/:owner/:repo/slack-review-request', asyncRoute(async (req: any, res: any) => {
-    const body = z.object({ channel: z.string().optional(), message: z.string().optional(), prNumbers: z.array(z.number()).optional() }).parse(req.body || {});
-    let prs = await d.github.pullRequestStatuses(req.params.owner, req.params.repo); if (body.prNumbers) prs = prs.filter(pr => body.prNumbers!.includes(pr.number));
-    res.json(await d.slack.sendReviewRequest({ channel: body.channel, text: body.message || `Please review ${prs.length} open Dependabot pull request(s) in ${req.params.owner}/${req.params.repo}.`, pullRequests: prs.map(pr => ({ title: pr.title, url: pr.url, status: `${pr.checks.conclusion}; ${pr.reviewState}` })) }));
+    res.json(await d.slack.sendReviewRequest(await prepareSlackReview(req)));
   }));
+  router.post('/repos/:owner/:repo/slack-review-request/stream', async (req: any, res: any) => {
+    res.status(200);
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.flushHeaders?.();
+    const write = (event: unknown) => {
+      if (!res.writableEnded && !res.destroyed) res.write(`${JSON.stringify(event)}\n`);
+    };
+    try {
+      write({ type: 'progress', progress: { id: 'prepare', label: 'Prepare review request', status: 'running' } });
+      const input = await prepareSlackReview(req);
+      write({ type: 'progress', progress: { id: 'prepare', label: 'Prepare review request', status: 'completed', detail: `${input.pullRequests.length} pull request${input.pullRequests.length === 1 ? '' : 's'}` } });
+      const result = await d.slack.sendReviewRequest({
+        ...input,
+        onProgress: progress => write({ type: 'progress', progress })
+      });
+      write({ type: 'result', result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      write({ type: 'error', error: message });
+    } finally {
+      if (!res.writableEnded) res.end();
+    }
+  });
 
   router.get('/state/export', asyncRoute(async (_req: any, res: any) => res.json(await d.repo.exportState())));
   router.post('/state/import', asyncRoute(async (req: any, res: any) => { await d.repo.importState(req.body); res.status(204).end(); }));

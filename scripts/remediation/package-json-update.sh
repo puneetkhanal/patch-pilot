@@ -42,4 +42,4 @@ if [[ $open_pr == 1 ]]; then
   pr="$(gh pr list --repo "$repo" --head "$branch" --state open --json url --jq '.[0].url // empty')"
   [[ -n "$pr" ]] || pr="$(gh pr create --repo "$repo" --head "$branch" --base "$base" --title "Update $package_name to $target" --body "Automated JavaScript package update")"
 fi
-echo "branch: $branch"; echo "commit: $commit"; echo "worktree_path: $wt"; [[ -n "$pr" ]] && echo "pr_url: $pr"
+emit_remediation_result "$branch" "$commit" "$wt" "$pr"

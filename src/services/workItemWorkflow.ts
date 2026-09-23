@@ -61,7 +61,7 @@ export function buildWorkItemWorkflow(workItem: WorkItem, issues: TrackerIssue[]
         ? { id: 'pull-request', label: 'Pull request in progress', status: 'running', detail: `Job ${activePr.id} is ${activePr.status}` }
         : failedPr
           ? { id: 'pull-request', label: 'Pull request failed', status: 'failed', detail: failedPr.error || 'Review the job log and retry' }
-          : { id: 'pull-request', label: 'Create one pull request', status: current === 'pull-request' ? 'current' : 'remaining', detail: successfulFix ? 'The coordinated fix is ready to publish' : 'Waiting for a successful fix' },
+          : { id: 'pull-request', label: 'Create pull request', status: current === 'pull-request' ? 'current' : 'remaining', detail: successfulFix ? 'The coordinated fix is ready to publish' : 'Waiting for a successful fix' },
     reviewComplete
       ? { id: 'review', label: 'Review and merge', status: 'completed', detail: 'Work item merged', completedAt: workItem.updatedAt }
       : { id: 'review', label: 'Review and merge', status: current === 'review' ? 'current' : 'remaining', detail: prUrl ? 'Check CI, approvals, and merge status' : 'Waiting for a pull request' }
@@ -82,8 +82,8 @@ export function buildWorkItemWorkflow(workItem: WorkItem, issues: TrackerIssue[]
     nextAction = failedPr
       ? 'Review the failed PR log and retry.'
       : blocked.length
-        ? `Create one pull request for the completed work item. Review flagged members carefully: ${riskyNames}.`
-        : 'Create one pull request for the completed work item.';
+        ? `Create a pull request for the completed work item. Review flagged members carefully: ${riskyNames}.`
+        : 'Create a pull request for the completed work item.';
     nextActionKind = 'create-pr';
   }
   else if (!reviewComplete) {

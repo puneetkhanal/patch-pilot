@@ -28,6 +28,8 @@ describe('HTTP API integration', () => {
   let baseUrl: string;
   let repository: JsonRepository;
   let closedPrNumbers: number[];
+  let slackRequests: any[];
+  let slackFailure: Error | undefined;
 
   const alerts = [
     { number: 10, state: 'open', dependency: { package: { ecosystem: 'npm', name: 'lodash' }, manifest_path: 'package.json' }, security_advisory: { severity: 'high', cvss: { score: 8.1 } }, security_vulnerability: { vulnerable_version_range: '<4.17.21', first_patched_version: { identifier: '4.17.21' } } },
@@ -48,6 +50,8 @@ describe('HTTP API integration', () => {
 
     repository = new JsonRepository(path.join(directory, 'state.json'));
     closedPrNumbers = [];
+    slackRequests = [];
+    slackFailure = undefined;
     const config = loadConfig({ GH_TOKEN: 'test-token', ORCHESTRATOR_DEFAULT_PROJECT_PATH: projectPath, PORT: '0', CURSOR_MODEL: 'must-be-ignored', CURSOR_API_KEY: 'test-cursor-key' });
     vi.mocked(Agent.prompt).mockResolvedValue({
       status: 'finished',
@@ -75,7 +79,17 @@ describe('HTTP API integration', () => {
       batches,
       jobs: new JobManager(repository),
       worktrees: { list: async () => [], remove: async () => undefined } as any,
-      slack: { status: () => ({ configured: false }), sendReviewRequest: async () => ({ ok: true }) } as any,
+      slack: { status: () => ({ configured: true, provider: 'cursor-cloud-mcp', server: 'slack', tool: 'slack_send_message', defaultChannel: 'C0123456789' }), sendReviewRequest: async (input: any) => {
+        slackRequests.push(input);
+        input.onProgress?.({ id: 'cursor-agent', label: 'Start Cursor agent', status: 'running' });
+        input.onProgress?.({ id: 'cursor-agent', label: 'Start Cursor agent', status: 'completed', detail: 'Created test-agent' });
+        input.onProgress?.({ id: 'cursor-run', label: 'Send review instructions', status: 'running' });
+        input.onProgress?.({ id: 'cursor-run', label: 'Send review instructions', status: 'completed', detail: 'Run run-slack-test' });
+        input.onProgress?.({ id: 'slack-delivery', label: 'Call Slack MCP', status: 'running' });
+        if (slackFailure) throw slackFailure;
+        input.onProgress?.({ id: 'slack-delivery', label: 'Call Slack MCP', status: 'completed', detail: 'Slack accepted the message' });
+        return { ok: true, runId: 'run-slack-test' };
+      } } as any,
       analysisJobs: new AnalysisJobManager(repository, config),
       groupingJobs: new GroupingJobManager(repository, batches, config),
       settings: new SettingsService(path.join(directory, 'settings.json')),
@@ -102,8 +116,10 @@ describe('HTTP API integration', () => {
     const response = await fetch(`${baseUrl}${endpoint}`, { ...init, headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) } });
     const text = await response.text();
     const isJson = response.headers.get('content-type')?.includes('application/json');
-    return { status: response.status, body: text ? (isJson ? JSON.parse(text) : text) : undefined };
+    return { status: response.status, contentType: response.headers.get('content-type'), body: text ? (isJson ? JSON.parse(text) : text) : undefined };
   }
+
+  const ndjsonEvents = (body: unknown) => String(body).trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
 
   it('serves health, configuration, repository selection, and static UI', async () => {
     expect((await request('/api/health')).body.ok).toBe(true);
@@ -129,6 +145,18 @@ describe('HTTP API integration', () => {
     expect(skills).toEqual(expect.arrayContaining([
       expect.objectContaining({ provider: 'codex', skill: 'dependency-security-fix', configured: true })
     ]));
+
+    const cursorSkillsDirectory = path.join(directory, 'cursor-skills');
+    await fs.mkdir(path.join(cursorSkillsDirectory, 'secure-upgrade'), { recursive: true });
+    await fs.writeFile(path.join(cursorSkillsDirectory, 'secure-upgrade/SKILL.md'), '---\nname: Secure upgrade\ndescription: Remediate vulnerable dependencies.\n---\n');
+    const browsed = (await request(`/api/remediation/fix-agent-skills?cursorSkillsDirectory=${encodeURIComponent(cursorSkillsDirectory)}`)).body;
+    expect(browsed).toContainEqual(expect.objectContaining({ provider: 'cursor', skill: 'secure-upgrade', configured: true }));
+    const updated = await request('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ repositoriesRoot: directory, cursorSkillsDirectory, defaultCursorSkill: 'secure-upgrade' })
+    });
+    expect(updated.body.settings).toMatchObject({ cursorSkillsDirectory, defaultCursorSkill: 'secure-upgrade' });
+    expect((await request('/api/remediation/fix-agent-skills')).body).toContainEqual(expect.objectContaining({ provider: 'cursor', skill: 'secure-upgrade' }));
   });
 
   it('rejects an unregistered fix skill before starting a remediation job', async () => {
@@ -246,6 +274,122 @@ describe('HTTP API integration', () => {
     expect(job.workItems[0]).toMatchObject({ grouping: { source: 'ai', safetyScore: 90 } });
     const issues = (await request('/api/repos/owner/repo/issues')).body;
     expect(issues.every((issue: any) => issue.lastUpgradeAnalysis?.dependencyGraph)).toBe(true);
+  });
+
+  it('sends only explicitly selected open pull requests through the review notifier', async () => {
+    await request('/api/repos/owner/repo/scan', { method: 'POST' });
+    const status = await request('/api/slack/status');
+    expect(status.body).toMatchObject({ configured: true, provider: 'cursor-cloud-mcp', server: 'slack', tool: 'slack_send_message' });
+
+    const empty = await request('/api/repos/owner/repo/slack-review-request', { method: 'POST', body: JSON.stringify({ prNumbers: [] }) });
+    expect(empty.status).toBe(400);
+    const missing = await request('/api/repos/owner/repo/slack-review-request', { method: 'POST', body: JSON.stringify({ prNumbers: [999] }) });
+    expect(missing).toMatchObject({ status: 404, body: { error: 'Open pull request(s) not found: 999' } });
+
+    const sent = await request('/api/repos/owner/repo/slack-review-request', { method: 'POST', body: JSON.stringify({ channel: 'C0999999999', prNumbers: [7] }) });
+    expect(sent).toMatchObject({ status: 200, body: { ok: true, runId: 'run-slack-test' } });
+    expect(slackRequests).toEqual([expect.objectContaining({
+      channel: 'C0999999999',
+      text: expect.stringMatching(/Hi Team,[\s\S]*PR #7 — Security update[\s\S]*lodash → 4\.17\.21[\s\S]*alerts #10, #11/),
+      pullRequests: [{ title: 'Security update', url: 'https://example.com/pull/7', status: 'pending; review_required' }]
+    })]);
+
+    const streamed = await request('/api/repos/owner/repo/slack-review-request/stream', { method: 'POST', body: JSON.stringify({ prNumbers: [7] }) });
+    expect(streamed.status).toBe(200);
+    const events = String(streamed.body).trim().split('\n').map(line => JSON.parse(line));
+    expect(events).toEqual(expect.arrayContaining([
+      { type: 'progress', progress: expect.objectContaining({ id: 'prepare', status: 'running' }) },
+      { type: 'progress', progress: expect.objectContaining({ id: 'prepare', status: 'completed' }) },
+      { type: 'progress', progress: expect.objectContaining({ id: 'cursor-agent', status: 'running' }) },
+      { type: 'progress', progress: expect.objectContaining({ id: 'slack-delivery', status: 'completed' }) },
+      { type: 'result', result: { ok: true, runId: 'run-slack-test' } }
+    ]));
+  });
+
+  it('streams the complete Slack review lifecycle in order and reports delivery failures in-band', async () => {
+    await request('/api/repos/owner/repo/scan', { method: 'POST' });
+
+    const delivered = await request('/api/repos/owner/repo/slack-review-request/stream', {
+      method: 'POST',
+      headers: { Accept: 'application/x-ndjson' },
+      body: JSON.stringify({ channel: 'C0999999999', prNumbers: [7] })
+    });
+    expect(delivered).toMatchObject({ status: 200, contentType: expect.stringContaining('application/x-ndjson') });
+    const deliveredEvents = ndjsonEvents(delivered.body);
+    expect(deliveredEvents.map(event => event.type === 'progress'
+      ? `${event.progress.id}:${event.progress.status}`
+      : event.type)).toEqual([
+      'prepare:running',
+      'prepare:completed',
+      'cursor-agent:running',
+      'cursor-agent:completed',
+      'cursor-run:running',
+      'cursor-run:completed',
+      'slack-delivery:running',
+      'slack-delivery:completed',
+      'result'
+    ]);
+    expect(deliveredEvents).toContainEqual({
+      type: 'progress',
+      progress: { id: 'prepare', label: 'Prepare review request', status: 'completed', detail: '1 pull request' }
+    });
+    expect(deliveredEvents.at(-1)).toEqual({ type: 'result', result: { ok: true, runId: 'run-slack-test' } });
+    expect(slackRequests.at(-1)).toEqual(expect.objectContaining({
+      channel: 'C0999999999',
+      text: expect.stringMatching(/Hi Team,[\s\S]*PR #7 — Security update[\s\S]*lodash → 4\.17\.21[\s\S]*alerts #10, #11/),
+      pullRequests: [{ title: 'Security update', url: 'https://example.com/pull/7', status: 'pending; review_required' }],
+      onProgress: expect.any(Function)
+    }));
+
+    slackFailure = new Error('Slack MCP tool returned an error');
+    const failed = await request('/api/repos/owner/repo/slack-review-request/stream', {
+      method: 'POST',
+      body: JSON.stringify({ prNumbers: [7] })
+    });
+    const failedEvents = ndjsonEvents(failed.body);
+    expect(failed.status).toBe(200);
+    expect(failedEvents.map(event => event.type === 'progress'
+      ? `${event.progress.id}:${event.progress.status}`
+      : event.type)).toEqual([
+      'prepare:running',
+      'prepare:completed',
+      'cursor-agent:running',
+      'cursor-agent:completed',
+      'cursor-run:running',
+      'cursor-run:completed',
+      'slack-delivery:running',
+      'error'
+    ]);
+    expect(failedEvents.at(-1)).toEqual({ type: 'error', error: 'Slack MCP tool returned an error' });
+    expect(failedEvents.some(event => event.type === 'result')).toBe(false);
+
+    slackFailure = undefined;
+    const invalid = await request('/api/repos/owner/repo/slack-review-request/stream', {
+      method: 'POST',
+      body: JSON.stringify({ prNumbers: [] })
+    });
+    expect(ndjsonEvents(invalid.body)).toEqual([
+      { type: 'progress', progress: { id: 'prepare', label: 'Prepare review request', status: 'running' } },
+      { type: 'error', error: 'Select at least one pull request' }
+    ]);
+  });
+
+  it('serves the clickable Slack spinner and progress-dialog UI contract', async () => {
+    const [page, stylesheet] = await Promise.all([
+      request('/prs.html'),
+      request('/app.css')
+    ]);
+    expect(page.status).toBe(200);
+    expect(page.body).toEqual(expect.stringContaining('id="slack-progress-dialog"'));
+    expect(page.body).toEqual(expect.stringContaining('id="slack-progress-steps"'));
+    expect(page.body).toEqual(expect.stringContaining("route('/slack-review-request/stream')"));
+    expect(page.body).toEqual(expect.stringContaining("button.classList.add('slack-sending')"));
+    expect(page.body).toEqual(expect.stringContaining('if (activeSlackDelivery)'));
+    expect(page.body).toEqual(expect.stringContaining('openSlackProgress();'));
+    expect(stylesheet.body).toEqual(expect.stringContaining('.slack-sending::before'));
+    expect(stylesheet.body).toEqual(expect.stringContaining('@keyframes slack-spin'));
+    expect(stylesheet.body).toEqual(expect.stringContaining('.slack-progress-step.running'));
+    expect(stylesheet.body).toEqual(expect.stringContaining('.slack-progress-step.failed'));
   });
 
   it('keeps optional model stages behind explicit configuration', async () => {

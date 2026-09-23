@@ -2,7 +2,12 @@
 set -euo pipefail
 slugify(){ printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/\.lock([^-]|$)/lock\1/g;s/[^a-z0-9]+/-/g;s/^-+|-+$//g'; }
 run_hook(){ local p="$1"; [[ -z "$p" ]] && return 0; [[ -x "$p" ]] || { echo "Hook is not executable: $p" >&2; return 2; }; "$p"; }
-resolve_repo(){ local repo="$1" root="$2"; if [[ -n "$root" && -d "$root/.git" ]]; then echo "$root"; return; fi; local cache="${DEPENDABOT_FIX_CACHE_ROOT:-$HOME/.cache/dependabot-orchestrator}"; mkdir -p "$cache"; local name="${repo#*/}" dst="$cache/$name"; if [[ ! -d "$dst/.git" ]]; then gh repo clone "$repo" "$dst"; else git -C "$dst" fetch origin --prune; fi; echo "$dst"; }
+emit_remediation_result(){
+  local branch="$1" commit="$2" worktree_path="$3" pr_url="${4:-}"
+  printf 'branch: %s\ncommit: %s\nworktree_path: %s\n' "$branch" "$commit" "$worktree_path"
+  if [[ -n "$pr_url" ]]; then printf 'pr_url: %s\n' "$pr_url"; fi
+}
+resolve_repo(){ local repo="$1" root="$2"; if [[ -n "$root" && -d "$root/.git" ]]; then echo "$root"; return; fi; local cache="${DEPENDABOT_FIX_CACHE_ROOT:-$HOME/.cache/patchpilot}"; mkdir -p "$cache"; local name="${repo#*/}" dst="$cache/$name"; if [[ ! -d "$dst/.git" ]]; then gh repo clone "$repo" "$dst"; else git -C "$dst" fetch origin --prune; fi; echo "$dst"; }
 resolve_npm_manifest(){
   local reported="$1" candidate
   case "$(basename "$reported")" in

@@ -25,4 +25,14 @@ describe('remediation shell helpers', () => {
     const { stdout } = await exec('bash', ['-c', 'source "$1"; resolve_npm_manifest packages/app/package.json', 'bash', helper]);
     expect(stdout.trim()).toBe('packages/app/package.json');
   });
+
+  it('reports a successful local remediation when no PR URL exists yet', async () => {
+    const helper = path.resolve('scripts/remediation/fix-common.sh');
+    const { stdout } = await exec('bash', ['-c', 'source "$1"; emit_remediation_result test-branch abc123 /tmp/test-worktree ""', 'bash', helper]);
+    expect(stdout.trim().split('\n')).toEqual([
+      'branch: test-branch',
+      'commit: abc123',
+      'worktree_path: /tmp/test-worktree'
+    ]);
+  });
 });

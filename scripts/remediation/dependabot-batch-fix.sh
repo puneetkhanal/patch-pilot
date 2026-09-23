@@ -108,8 +108,5 @@ if [[ $open_pr == 1 ]]; then
 elif [[ $push == 1 ]]; then
   pr="$(gh pr list --repo "$repo" --head "$branch" --state open --json url --jq '.[0].url // empty')"
 fi
-echo "branch: $branch"
-echo "commit: $commit"
-echo "worktree_path: $wt"
-[[ -n "$pr" ]] && echo "pr_url: $pr"
+emit_remediation_result "$branch" "$commit" "$wt" "$pr"
 [[ $failures == 0 ]] || { echo "$failures alert(s) failed" >&2; exit 6; }

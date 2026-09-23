@@ -10,10 +10,12 @@
     "test": "vitest run",
     "test:unit": "vitest run --exclude test/api.integration.test.ts",
     "test:integration": "vitest run test/api.integration.test.ts",
+    "test:e2e:github": "RUN_GITHUB_E2E=1 vitest run test/githubRemediation.e2e.test.ts --testTimeout=600000 --hookTimeout=120000",
+    "test:e2e:slack": "RUN_SLACK_E2E=1 vitest run test/slackCursor.e2e.test.ts --testTimeout=180000 --hookTimeout=30000",
     "audit:identifiers": "node scripts/audit-identifiers.mjs"
   },
   "dependencies": {
-    "@cursor/sdk": "^1.0.31",
+    "@cursor/sdk": "^1.0.32",
     "@openai/codex-sdk": "^0.154.0",
     "express": "^5.1.0",
     "zod": "^3.25.76"

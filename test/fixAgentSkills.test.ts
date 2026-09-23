@@ -26,4 +26,19 @@ describe('FixAgentSkillService', () => {
     await expect(service.resolve({ provider: 'codex', skill: '../escape' })).rejects.toMatchObject({ status: 400 });
     await expect(service.resolve({ provider: 'cursor', skill: 'security-fix' })).rejects.toMatchObject({ status: 412 });
   });
+
+  it('discovers and resolves Cursor skills from a configured skills directory', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'fix-skills-')); directories.push(root);
+    const cursorSkills = path.join(root, 'shared-cursor-skills');
+    await fs.mkdir(path.join(cursorSkills, 'vulnerability-remediation'), { recursive: true });
+    await fs.writeFile(path.join(cursorSkills, 'vulnerability-remediation/SKILL.md'), '---\nname: Vulnerability remediation\ndescription: Apply and verify security updates.\n---\n');
+    const service = new FixAgentSkillService(loadConfig({ CURSOR_API_KEY: 'test-key' }), root);
+
+    expect(await service.list(cursorSkills)).toContainEqual(expect.objectContaining({
+      provider: 'cursor', skill: 'vulnerability-remediation', configured: true
+    }));
+    await expect(service.resolve({ provider: 'cursor', skill: 'vulnerability-remediation' }, cursorSkills)).resolves.toMatchObject({
+      file: path.join(cursorSkills, 'vulnerability-remediation/SKILL.md')
+    });
+  });
 });

@@ -2,8 +2,16 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 
-export interface AppSettings { repositoriesRoot?: string }
-const settingsSchema = z.object({ repositoriesRoot: z.string().min(1).optional() });
+export interface AppSettings {
+  repositoriesRoot?: string;
+  cursorSkillsDirectory?: string;
+  defaultCursorSkill?: string;
+}
+const settingsSchema = z.object({
+  repositoriesRoot: z.string().min(1).optional(),
+  cursorSkillsDirectory: z.string().min(1).optional(),
+  defaultCursorSkill: z.string().min(1).optional()
+});
 
 export class SettingsService {
   private settings: AppSettings = {};

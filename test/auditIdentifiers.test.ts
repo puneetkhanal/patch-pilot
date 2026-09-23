@@ -25,6 +25,8 @@ describe('identifier audit', () => {
     const cwd = await fixture([
       'https://generativelanguage.googleapis.com/v1beta/models/example',
       'https://api.github.com/repos/owner/repo',
+      'https://cursor.com/agents',
+      'https://mcp.slack.com/mcp',
       'SHA-256'
     ].join('\n'));
     await expect(exec(process.execPath, [script], { cwd })).resolves.toMatchObject({ stdout: 'identifier audit passed\n' });

@@ -1,7 +1,186 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pull requests · PatchPilot</title><link rel="stylesheet" href="/app.css"></head><body>
 <header class="topbar"><a class="brand" href="/"><span class="brand-mark">P</span><span>PatchPilot</span></a><nav><a href="/">Issues</a><a class="active" href="/prs.html">Pull requests</a><a href="/worktrees.html">Worktrees</a></nav></header>
-<main><section class="hero compact"><div><p class="eyebrow">Review queue</p><h1>Open pull requests and live checks.</h1><p>See CI and review state in one view, then send the selected queue to Slack through your configured MCP server.</p></div><div id="slack-status" class="status-pill">Checking Slack…</div></section>
-<section class="control-panel"><label>Repository<input id="repo" placeholder="owner/repository"></label><button class="primary" id="refresh">Refresh PR status</button><label>Slack channel<input id="channel" placeholder="#security-reviews"></label><button id="send-slack">Send review request</button></section><div id="notice" class="notice hidden"></div><div class="table-wrap" style="margin-top:18px"><table><thead><tr><th></th><th>Pull request</th><th>Branch</th><th>Checks</th><th>Review</th><th>Updated</th><th>Actions</th></tr></thead><tbody id="rows"></tbody></table></div></main>
+<main><section class="hero compact"><div><p class="eyebrow">Review queue</p><h1>Open pull requests and live checks.</h1><p>See CI and review state in one view, then ask Cursor to send one pull request or the selected queue through your authenticated Slack MCP server.</p></div><div id="slack-status" class="status-pill">Checking Slack…</div></section>
+<section class="control-panel"><label>Repository<input id="repo" placeholder="owner/repository"></label><button class="primary" id="refresh">Refresh PR status</button><label>Slack channel ID<input id="channel" placeholder="C0123456789"></label><button id="send-slack">Send selected to Slack</button></section><div id="notice" class="notice hidden"></div><div class="table-wrap" style="margin-top:18px"><table><thead><tr><th></th><th>Pull request</th><th>Branch</th><th>Checks</th><th>Review</th><th>Updated</th><th>Actions</th></tr></thead><tbody id="rows"></tbody></table></div></main>
+<dialog id="slack-progress-dialog" class="slack-progress-dialog"><div class="dialog-head"><div><p class="eyebrow">Slack review delivery</p><h2>Cursor agent progress</h2></div><button type="button" id="close-slack-progress">Close</button></div><p id="slack-progress-summary" class="slack-progress-summary">Starting…</p><ol id="slack-progress-steps" class="slack-progress-steps"></ol></dialog>
 <script type="module">
-import{$,api,h,installRepoControls,settings,splitRepo,withBusy}from'./common.js';let prs=[];const selected=new Set();const defaults=await api('/api/config/defaults');installRepoControls(defaults);const slack=await api('/api/slack/status');$('#slack-status').textContent=slack.configured?`Slack MCP ready · ${slack.tool}`:'Slack MCP not configured';function route(s=''){const[o,r]=splitRepo();return`/api/repos/${o}/${r}${s}`}function msg(t,e=false){const n=$('#notice');n.textContent=t;n.className=`notice${e?' error':''}`}async function load(){settings.repo=$('#repo').value;prs=await api(route('/pull-requests'));const openNumbers=new Set(prs.map(pr=>pr.number));for(const number of selected)if(!openNumbers.has(number))selected.delete(number);const rows=$('#rows');rows.replaceChildren(...prs.map(pr=>{const check=h('input',{type:'checkbox',checked:selected.has(pr.number),onchange:e=>e.target.checked?selected.add(pr.number):selected.delete(pr.number)});return h('tr',{},h('td',{},check),h('td',{},h('a',{href:pr.url,target:'_blank',rel:'noreferrer'},`#${pr.number} ${pr.title}`),h('div',{class:'manifest'},pr.author||'')),h('td',{class:'manifest'},pr.branch),h('td',{},h('span',{class:`status-dot ${pr.checks.conclusion}`}),`${pr.checks.conclusion} (${pr.checks.successful}/${pr.checks.total})`),h('td',{},pr.reviewState.replaceAll('_',' ')),h('td',{},new Date(pr.updatedAt).toLocaleString()),h('td',{},h('button',{class:'danger',onclick:e=>closePr(pr,e.currentTarget)},'Close PR')))}));if(!prs.length)rows.append(h('tr',{},h('td',{colspan:'7'},'No open pull requests.')))}async function closePr(pr,button){if(!confirm(`Close pull request #${pr.number} — ${pr.title}?`))return;try{await withBusy(button,'Closing…',async()=>{await api(route(`/pull-requests/${pr.number}/close`),{method:'POST',body:'{}'});selected.delete(pr.number);msg(`Pull request #${pr.number} closed.`);await load()})}catch(x){msg(x.message,true)}}$('#refresh').onclick=async e=>{const button=e.currentTarget;try{await withBusy(button,'Refreshing…',load)}catch(x){msg(x.message,true)}};$('#send-slack').onclick=async e=>{const button=e.currentTarget;try{await withBusy(button,'Sending…',async()=>{if(!selected.size)throw new Error('Select at least one pull request.');await api(route('/slack-review-request'),{method:'POST',body:JSON.stringify({channel:$('#channel').value||undefined,prNumbers:[...selected]})});msg('Review request sent through Slack MCP.')})}catch(x){msg(x.message,true)}};if(settings.repo)load().catch(e=>msg(e.message,true));
+import { $, api, h, installRepoControls, settings, splitRepo, withBusy } from './common.js';
+
+let prs = [];
+const selected = new Set();
+let activeSlackDelivery = null;
+const progressOrder = ['prepare', 'cursor-agent', 'cursor-run', 'slack-delivery'];
+const progressDefaults = new Map([
+  ['prepare', { id: 'prepare', label: 'Prepare review request', status: 'pending' }],
+  ['cursor-agent', { id: 'cursor-agent', label: 'Start Cursor agent', status: 'pending' }],
+  ['cursor-run', { id: 'cursor-run', label: 'Send review instructions', status: 'pending' }],
+  ['slack-delivery', { id: 'slack-delivery', label: 'Call Slack MCP', status: 'pending' }]
+]);
+const defaults = await api('/api/config/defaults');
+installRepoControls(defaults);
+const slack = await api('/api/slack/status');
+const sendButton = $('#send-slack');
+$('#slack-status').textContent = slack.configured
+  ? `Cursor Slack configured · ${slack.server}/${slack.tool}${slack.defaultChannel ? ` · ${slack.defaultChannel}` : ''}`
+  : 'Cursor Slack not configured';
+sendButton.disabled = !slack.configured;
+if (slack.defaultChannel) $('#channel').value = slack.defaultChannel;
+
+function route(suffix = '') {
+  const [owner, repo] = splitRepo();
+  return `/api/repos/${owner}/${repo}${suffix}`;
+}
+
+function msg(text, error = false) {
+  const notice = $('#notice');
+  notice.textContent = text;
+  notice.className = `notice${error ? ' error' : ''}`;
+}
+
+function openSlackProgress() {
+  const dialog = $('#slack-progress-dialog');
+  if (!dialog.open) dialog.showModal();
+}
+
+function renderSlackProgress(state) {
+  const steps = $('#slack-progress-steps');
+  steps.replaceChildren(...progressOrder.map(id => {
+    const step = state.steps.get(id) || progressDefaults.get(id);
+    return h('li', { class: `slack-progress-step ${step.status}` },
+      h('div', {}, h('strong', {}, step.label), step.detail ? h('small', {}, step.detail) : null)
+    );
+  }));
+  $('#slack-progress-summary').textContent = state.error
+    ? state.error
+    : state.complete
+      ? 'The review request was delivered to Slack.'
+      : 'Delivery is running. You can close this panel without interrupting it.';
+  $('#slack-progress-dialog').classList.toggle('has-error', Boolean(state.error));
+}
+
+async function streamSlackReview(prNumbers, onEvent) {
+  const response = await fetch(route('/slack-review-request/stream'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+    body: JSON.stringify({ channel: $('#channel').value || undefined, prNumbers })
+  });
+  if (!response.ok || !response.body) throw new Error(`${response.status} ${response.statusText}`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) if (line.trim()) onEvent(JSON.parse(line));
+    if (done) break;
+  }
+  if (buffer.trim()) onEvent(JSON.parse(buffer));
+}
+
+async function sendSlackReview(prNumbers, button, successMessage) {
+  if (activeSlackDelivery) {
+    openSlackProgress();
+    return;
+  }
+  if (!prNumbers.length) {
+    msg('Select at least one pull request.', true);
+    return;
+  }
+  const originalLabel = button.textContent;
+  const state = { button, steps: new Map(progressDefaults), complete: false, error: '' };
+  activeSlackDelivery = state;
+  button.textContent = 'Sending…';
+  button.classList.add('slack-sending');
+  button.setAttribute('aria-busy', 'true');
+  button.title = 'Click to view delivery progress';
+  renderSlackProgress(state);
+  msg('Slack delivery started. Click the spinning button to view progress.');
+  try {
+    let delivered = false;
+    await streamSlackReview(prNumbers, event => {
+      if (event.type === 'progress') {
+        state.steps.set(event.progress.id, event.progress);
+        renderSlackProgress(state);
+      } else if (event.type === 'result') {
+        delivered = true;
+      } else if (event.type === 'error') {
+        throw new Error(event.error);
+      }
+    });
+    if (!delivered) throw new Error('Slack delivery ended without a result.');
+    state.complete = true;
+    renderSlackProgress(state);
+    msg(successMessage);
+  } catch (error) {
+    state.error = error.message;
+    const running = [...state.steps.values()].find(step => step.status === 'running');
+    if (running) state.steps.set(running.id, { ...running, status: 'failed', detail: error.message });
+    renderSlackProgress(state);
+    openSlackProgress();
+    msg(error.message, true);
+  } finally {
+    button.textContent = originalLabel;
+    button.classList.remove('slack-sending');
+    button.removeAttribute('aria-busy');
+    button.removeAttribute('title');
+    activeSlackDelivery = null;
+  }
+}
+
+async function load() {
+  settings.repo = $('#repo').value;
+  prs = await api(route('/pull-requests'));
+  const openNumbers = new Set(prs.map(pr => pr.number));
+  for (const number of selected) if (!openNumbers.has(number)) selected.delete(number);
+  const rows = $('#rows');
+  rows.replaceChildren(...prs.map(pr => {
+    const check = h('input', {
+      type: 'checkbox',
+      checked: selected.has(pr.number),
+      onchange: event => event.target.checked ? selected.add(pr.number) : selected.delete(pr.number)
+    });
+    const slackButton = h('button', {
+      class: 'accent',
+      disabled: slack.configured ? undefined : '',
+      'aria-label': `Request Slack review for pull request #${pr.number}`,
+      onclick: event => sendSlackReview([pr.number], event.currentTarget, `Pull request #${pr.number} sent to Slack for review.`)
+    }, 'Slack review');
+    const closeButton = h('button', { class: 'danger', onclick: event => closePr(pr, event.currentTarget) }, 'Close PR');
+    return h('tr', {},
+      h('td', {}, check),
+      h('td', {}, h('a', { href: pr.url, target: '_blank', rel: 'noreferrer' }, `#${pr.number} ${pr.title}`), h('div', { class: 'manifest' }, pr.author || '')),
+      h('td', { class: 'manifest' }, pr.branch),
+      h('td', {}, h('span', { class: `status-dot ${pr.checks.conclusion}` }), `${pr.checks.conclusion} (${pr.checks.successful}/${pr.checks.total})`),
+      h('td', {}, pr.reviewState.replaceAll('_', ' ')),
+      h('td', {}, new Date(pr.updatedAt).toLocaleString()),
+      h('td', {}, h('div', { class: 'card-actions' }, slackButton, closeButton))
+    );
+  }));
+  if (!prs.length) rows.append(h('tr', {}, h('td', { colspan: '7' }, 'No open pull requests.')));
+}
+
+async function closePr(pr, button) {
+  if (!confirm(`Close pull request #${pr.number} — ${pr.title}?`)) return;
+  try {
+    await withBusy(button, 'Closing…', async () => {
+      await api(route(`/pull-requests/${pr.number}/close`), { method: 'POST', body: '{}' });
+      selected.delete(pr.number);
+      msg(`Pull request #${pr.number} closed.`);
+      await load();
+    });
+  } catch (error) {
+    msg(error.message, true);
+  }
+}
+
+$('#refresh').onclick = async event => {
+  const button = event.currentTarget;
+  try { await withBusy(button, 'Refreshing…', load); }
+  catch (error) { msg(error.message, true); }
+};
+sendButton.onclick = event => sendSlackReview([...selected], event.currentTarget, 'Selected pull requests sent to Slack for review.');
+$('#close-slack-progress').onclick = () => $('#slack-progress-dialog').close();
+if (settings.repo) load().catch(error => msg(error.message, true));
 </script></body></html>

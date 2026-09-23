@@ -6,11 +6,12 @@
   <title>PatchPilot · Automated Vulnerability Orchestrator</title>
   <link rel="stylesheet" href="/app.css">
   <link rel="stylesheet" href="/settings.css">
-  <link rel="stylesheet" href="/fix-agent.css">
   <link rel="stylesheet" href="/workflow.css">
   <link rel="stylesheet" href="/dependency-graph.css">
   <link rel="stylesheet" href="/grouping.css">
   <link rel="stylesheet" href="/auto-group.css">
+  <link rel="stylesheet" href="/repository-picker.css">
+  <link rel="stylesheet" href="/dashboard-layout.css">
 </head>
 <body>
   <header class="topbar">
@@ -21,32 +22,50 @@
   </header>
   <main>
     <section class="hero compact">
-      <div><p class="eyebrow">Automated vulnerability remediation</p><h1>Find the risk. Ship the fix.</h1><p>Organize Dependabot issues into work items, analyze every dependency in a work item, and deliver one coordinated pull request. JavaScript/npm is supported today, with Python and Go adapters planned.</p></div>
-      <div class="status-pill" id="connection">Checking configuration…</div>
+      <div class="hero-copy"><p class="eyebrow">Automated vulnerability remediation</p><h1>Find the risk. Ship the fix.</h1><p>Organize Dependabot issues into work items, analyze every dependency in a work item, and deliver one coordinated pull request. JavaScript/npm is supported today, with Python and Go adapters planned.</p><div class="status-pill hero-status" id="connection">Checking configuration…</div></div>
     </section>
 
     <section class="control-panel" aria-label="Repository controls">
-      <label>GitHub repository<input id="repo" list="repo-options" placeholder="owner/repository" autocomplete="off"><datalist id="repo-options"></datalist></label>
-      <label class="grow">Local clone path<input id="project-path" placeholder="/path/to/local/clone"></label>
-      <button class="primary" id="scan">Scan repository</button>
-      <button id="refresh">Refresh board</button>
+      <div class="repository-field">
+        <span class="field-label" id="repository-label">GitHub repository</span>
+        <button class="repository-trigger" id="repository-trigger" type="button" aria-labelledby="repository-label repository-value" aria-haspopup="listbox" aria-expanded="false" aria-controls="repository-menu">
+          <span class="repository-mark" aria-hidden="true">GH</span>
+          <span class="repository-trigger-copy"><strong id="repository-value">Choose a repository</strong><small id="repository-detail">Search local clones or GitHub</small></span>
+          <span class="repository-chevron" aria-hidden="true">⌄</span>
+        </button>
+        <input id="repo" type="hidden">
+        <div class="repository-menu hidden" id="repository-menu">
+          <div class="repository-search-wrap"><span aria-hidden="true">⌕</span><input id="repository-search" type="search" placeholder="Search repositories…" aria-label="Search repositories" autocomplete="off"></div>
+          <div class="repository-options" id="repository-options" role="listbox" aria-labelledby="repository-label"></div>
+          <button class="repository-settings-link" id="repository-settings-link" type="button">Manage repository folders in Settings</button>
+        </div>
+      </div>
+      <input id="project-path" type="hidden">
+      <div class="repository-actions"><button class="primary" id="scan">Scan repository</button><div class="refresh-control"><button id="refresh" type="button" aria-label="Refresh board"><span aria-hidden="true">↻</span> Refresh</button><small id="refresh-status">Not refreshed yet</small></div></div>
     </section>
 
     <section class="summary" id="summary" aria-live="polite"></section>
-    <section class="toolbar">
-      <div class="segmented" id="view-filters"><button class="selected" data-view="work-items">Work items</button><button data-view="issues" data-state="">Dependabot issues</button><button data-view="issues" data-state="NEW">New</button><button data-view="issues" data-state="TRIAGED">Triaged</button><button data-view="issues" data-state="IN_PROGRESS">In progress</button><button data-view="issues" data-state="READY_FOR_REVIEW">Review</button><button data-view="issues" data-state="BLOCKED">Blocked</button></div>
-      <label class="inline-filter">Risk<select id="risk-filter"><option value="">All risks</option><option value="safe">Safe</option><option value="likely_safe">Likely safe</option><option value="risky">Risky</option><option value="unsafe">Unsafe</option><option value="not_analyzed">Not analyzed</option></select></label>
-      <input id="search" class="search" type="search" placeholder="Filter packages and manifests">
-      <label class="inline-filter">Max per group<select id="group-size"><option>2</option><option selected>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option></select></label>
-      <label class="inline-filter">AI provider<select id="ai-provider"><option value="cursor">Cursor</option><option value="gemini">Gemini</option></select></label>
-      <button id="auto-batch" class="accent">AI auto-group work items</button>
-      <button id="grouping-prompt-button">Grouping prompt</button>
-      <button id="reset-work-items" class="danger">Reset work items</button>
-      <button id="select-visible" class="issue-view-control hidden">Select shown</button>
-      <button id="clear-selected" class="issue-view-control hidden">Clear selection</button>
-      <span id="selection-count" class="selection-count issue-view-control hidden">0 selected</span>
-      <button id="analyze-selected" class="issue-view-control hidden">Analyze selected</button>
-      <button id="create-batch" class="accent issue-view-control hidden">Create work item</button>
+    <section class="toolbar" aria-label="Board controls">
+      <div class="toolbar-top">
+        <div class="segmented" id="view-filters"><button class="selected" data-view="work-items">Work items</button><button data-view="issues" data-state="">Dependabot issues</button><button data-view="issues" data-state="NEW">New</button><button data-view="issues" data-state="TRIAGED">Triaged</button><button data-view="issues" data-state="IN_PROGRESS">In progress</button><button data-view="issues" data-state="READY_FOR_REVIEW">Ready for review</button><button data-view="issues" data-state="BLOCKED">Blocked</button></div>
+      </div>
+      <div class="toolbar-bottom">
+        <div class="toolbar-filters">
+          <input id="search" class="search" type="search" placeholder="Filter packages and manifests" aria-label="Filter packages and manifests">
+          <label class="inline-filter">Risk<select id="risk-filter"><option value="">All risks</option><option value="safe">Safe</option><option value="likely_safe">Likely safe</option><option value="risky">Risky</option><option value="unsafe">Unsafe</option><option value="not_analyzed">Not analyzed</option></select></label>
+          <label class="inline-filter">Max per group<select id="group-size"><option>2</option><option selected>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option></select></label>
+          <label class="inline-filter">AI provider<select id="ai-provider"><option value="cursor">Cursor</option><option value="gemini">Gemini</option></select></label>
+        </div>
+        <div class="toolbar-actions">
+          <button id="auto-batch" class="accent" disabled>AI auto-group work items</button>
+          <button id="select-visible" class="issue-view-control hidden">Select shown</button>
+          <button id="clear-selected" class="issue-view-control hidden">Clear selection</button>
+          <span id="selection-count" class="selection-count issue-view-control hidden">0 selected</span>
+          <button id="analyze-selected" class="issue-view-control hidden">Analyze selected</button>
+          <button id="create-batch" class="accent issue-view-control hidden">Create work item</button>
+          <details class="advanced-menu" id="advanced-actions"><summary aria-label="More board actions">More <span aria-hidden="true">•••</span></summary><div class="advanced-menu-panel"><button id="grouping-prompt-button" type="button">Grouping prompt</button><button id="reset-work-items" class="danger" type="button">Reset work items</button></div></details>
+        </div>
+      </div>
     </section>
 
     <div id="notice" class="notice hidden" role="status"></div>
@@ -56,14 +75,6 @@
 
   <dialog id="issue-dialog" class="drawer"><div id="issue-detail"></div></dialog>
   <dialog id="log-dialog" class="log-dialog"><div class="dialog-head"><h2>Job output</h2><button data-close-log>Close</button></div><pre id="job-log"></pre></dialog>
-  <dialog id="fix-agent-dialog" class="fix-agent-dialog">
-    <div class="dialog-head"><div><p class="eyebrow">Remediation workflow</p><h2>Run fix</h2></div><button type="button" data-close-fix-agent>Close</button></div>
-    <p>Choose the configured skill that may inspect and refine the dependency update. Every run starts from fresh issue analysis in an isolated worktree.</p>
-    <div id="fix-agent-issue" class="fix-agent-issue"></div>
-    <label>Fix runner<select id="fix-agent-select"></select></label>
-    <p class="muted-text">The built-in updater changes the dependency first. If selected, the agent then applies its skill, checks compatibility, and validates the result before the job commits.</p>
-    <div class="detail-actions"><button id="start-fix" type="button" class="primary">Run fix</button></div>
-  </dialog>
   <dialog id="grouping-prompt-dialog" class="log-dialog grouping-prompt-dialog">
     <div class="dialog-head"><div><p class="eyebrow">AI grouping planner</p><h2>Grouping prompt</h2></div><button type="button" data-close-grouping-prompt>Close</button></div>
     <p class="muted-text">The server appends manifests, lockfile excerpts, import usage, per-issue dependency analysis, merged dependency graph, duplicate-target overlaps, and the full Dependabot issue list. The model must return groups of at most your selected max size; server validation enforces limits, deduplicates overlapping package targets, and isolates omitted issues.</p>
@@ -94,8 +105,11 @@
   </dialog>
   <dialog id="settings-dialog" class="settings-dialog">
     <form method="dialog" class="dialog-head"><div><p class="eyebrow">Local repositories</p><h2>Settings</h2></div><button value="cancel">Close</button></form>
-    <p class="settings-copy">Choose the parent folder containing your GitHub clones. The app scans it for git repositories with a GitHub origin and remembers the path.</p>
+    <p class="settings-copy">Choose the parent folder containing your GitHub clones and the Cursor skills directory used for AI vulnerability fixes.</p>
     <label>Repositories root path<input id="repositories-root" placeholder="/path/to/github/projects" autocomplete="off"></label>
+    <label>Cursor skills directory<input id="cursor-skills-directory" placeholder="/path/to/.cursor/skills" autocomplete="off"></label>
+    <div class="detail-actions"><button id="browse-cursor-skills" type="button">Browse skills</button><span id="cursor-skills-result" class="muted-text"></span></div>
+    <label>Default Cursor remediation skill<select id="default-cursor-skill"><option value="">No default Cursor skill</option></select></label>
     <div class="detail-actions"><button id="save-settings" class="primary" type="button">Save and scan</button><span id="settings-result" class="muted-text"></span></div>
     <div id="discovered-repositories" class="discovered-list"></div>
   </dialog>
