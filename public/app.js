@@ -677,9 +677,38 @@ function workItemWorkflowActions(workItem, workflow, busy = false) {
   return actions;
 }
 
+function captureWorkflowScroll(target) {
+  const logDetails = target.querySelector('.workflow-live-log');
+  const log = logDetails?.querySelector('pre');
+  const drawer = target.closest('.drawer');
+  return {
+    drawer,
+    drawerTop: drawer?.scrollTop || 0,
+    logOpen: logDetails?.open,
+    logLeft: log?.scrollLeft || 0,
+    logTop: log?.scrollTop || 0,
+    logWasAtBottom: log ? log.scrollHeight - log.clientHeight - log.scrollTop <= 4 : true,
+    hadLog: Boolean(log)
+  };
+}
+
+function restoreWorkflowScroll(target, scroll) {
+  const logDetails = target.querySelector('.workflow-live-log');
+  const log = logDetails?.querySelector('pre');
+  if (logDetails && scroll.hadLog) logDetails.open = scroll.logOpen;
+  if (log) {
+    log.scrollLeft = scroll.logLeft;
+    log.scrollTop = !scroll.hadLog || scroll.logWasAtBottom
+      ? log.scrollHeight
+      : Math.min(scroll.logTop, Math.max(0, log.scrollHeight - log.clientHeight));
+  }
+  if (scroll.drawer) scroll.drawer.scrollTop = scroll.drawerTop;
+}
+
 function renderWorkItemWorkflow(workItem, workflow, live = null) {
   const target = $('#work-item-workflow');
   if (!target || target.dataset.workItemId !== workItem.id) return;
+  const scroll = captureWorkflowScroll(target);
   const displayWorkflow = live?.job ? mergeWorkflowWithLiveAction(workflow, live.kind, live.job) : workflow;
   const busy = workflowActionBusy(workItem) || Boolean(live?.job && ['queued', 'running'].includes(live.job.status));
   const labels = { completed: 'Done', current: 'Next', running: 'In progress', remaining: 'Remaining', optional: 'Optional', failed: 'Failed' };
@@ -706,6 +735,7 @@ function renderWorkItemWorkflow(workItem, workflow, live = null) {
       h('time', {}, workflowTime(run.updatedAt))
     ))))] : [])
   );
+  restoreWorkflowScroll(target, scroll);
 }
 
 async function fetchWorkItemWorkflow(workItem) {

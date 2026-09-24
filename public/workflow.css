@@ -130,8 +130,10 @@
   line-height: 1.45;
   margin: 10px 0;
   max-height: 220px;
+  overscroll-behavior: contain;
   overflow: auto;
   padding: 10px 12px;
+  scrollbar-gutter: stable;
   white-space: pre-wrap;
 }
 
